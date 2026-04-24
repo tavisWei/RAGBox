@@ -1,0 +1,338 @@
+@import './base.css';
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  font-weight: normal;
+}
+
+/* ============================================
+   Reusable utility classes for views
+   ============================================ */
+
+.page-container {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--page-gap);
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-heading);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+
+.surface-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--rp-radius-lg);
+  box-shadow: var(--rp-shadow-sm);
+  padding: var(--page-padding);
+}
+
+.surface-card-hover {
+  transition: transform var(--rp-transition-base), box-shadow var(--rp-transition-base);
+}
+
+.surface-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--rp-shadow-md);
+}
+
+.surface-muted {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--rp-radius-md);
+  padding: 16px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--page-gap);
+}
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: var(--page-gap);
+}
+
+.page-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--page-gap);
+}
+
+.divider-soft {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border), transparent);
+  margin: 20px 0;
+}
+
+/* Text utilities */
+.text-primary { color: var(--color-text) !important; }
+.text-secondary { color: var(--color-text-secondary) !important; }
+.text-tertiary { color: var(--color-text-tertiary) !important; }
+.text-accent { color: var(--color-accent) !important; }
+.text-success { color: var(--rp-success-600) !important; }
+.text-warning { color: var(--rp-warning-600) !important; }
+.text-danger { color: var(--rp-danger-600) !important; }
+
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+
+/* Spacing utilities */
+.gap-sm { gap: 8px; }
+.gap-md { gap: 12px; }
+.gap-lg { gap: 20px; }
+.mt-sm { margin-top: 8px; }
+.mt-md { margin-top: 12px; }
+.mt-lg { margin-top: 20px; }
+.mb-sm { margin-bottom: 8px; }
+.mb-md { margin-bottom: 12px; }
+.mb-lg { margin-bottom: 20px; }
+
+/* Flex utilities */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.flex-1 { flex: 1; }
+
+/* ============================================
+   Safe global Element Plus overrides
+   ============================================ */
+
+/* Cards — lighter, rounder */
+.el-card {
+  border-radius: var(--rp-radius-lg) !important;
+  border: 1px solid var(--color-border) !important;
+  box-shadow: var(--rp-shadow-sm) !important;
+  background-color: var(--color-surface) !important;
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--color-border-light) !important;
+  padding: 16px 20px !important;
+  font-weight: 600;
+  color: var(--color-heading);
+}
+
+.el-card__body {
+  padding: 20px !important;
+}
+
+/* Buttons — softer radius */
+.el-button {
+  border-radius: var(--rp-radius-md) !important;
+  font-weight: 500 !important;
+  transition: all var(--rp-transition-fast) !important;
+}
+
+.el-button--primary {
+  background-color: var(--rp-primary-500) !important;
+  border-color: var(--rp-primary-500) !important;
+}
+
+.el-button--primary:hover,
+.el-button--primary:focus {
+  background-color: var(--rp-primary-600) !important;
+  border-color: var(--rp-primary-600) !important;
+}
+
+/* Inputs — lighter borders */
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--rp-radius-md) !important;
+  box-shadow: 0 0 0 1px var(--color-border) inset !important;
+  background-color: var(--color-surface) !important;
+  transition: box-shadow var(--rp-transition-fast) !important;
+}
+
+.el-input__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--rp-primary-300) inset !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--rp-primary-500) inset !important;
+}
+
+/* Select dropdowns */
+.el-select-dropdown {
+  border-radius: var(--rp-radius-md) !important;
+  box-shadow: var(--rp-shadow-lg) !important;
+  border: 1px solid var(--color-border) !important;
+}
+
+/* Dialogs */
+.el-dialog {
+  border-radius: var(--rp-radius-xl) !important;
+  box-shadow: var(--rp-shadow-xl) !important;
+  overflow: hidden;
+}
+
+.el-dialog__header {
+  padding: 20px 24px !important;
+  border-bottom: 1px solid var(--color-border-light);
+  margin-right: 0 !important;
+}
+
+.el-dialog__body {
+  padding: 24px !important;
+}
+
+.el-dialog__footer {
+  padding: 16px 24px !important;
+  border-top: 1px solid var(--color-border-light);
+}
+
+/* Tables */
+.el-table {
+  border-radius: var(--rp-radius-lg);
+  overflow: hidden;
+  background: var(--color-surface) !important;
+}
+
+.el-table th.el-table__cell {
+  background-color: var(--color-surface-muted) !important;
+  color: var(--color-heading) !important;
+  font-weight: 600 !important;
+  font-size: 13px;
+}
+
+.el-table td.el-table__cell {
+  color: var(--color-text) !important;
+}
+
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: var(--rp-gray-50) !important;
+}
+
+.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell {
+  background-color: var(--rp-primary-50) !important;
+}
+
+/* Pagination */
+.el-pagination.is-background .el-pager li:not(.is-disabled).is-active {
+  background-color: var(--rp-primary-500) !important;
+}
+
+/* Tags */
+.el-tag {
+  border-radius: var(--rp-radius-sm) !important;
+  font-weight: 500 !important;
+}
+
+/* Timeline */
+.el-timeline-item__node {
+  background-color: var(--rp-primary-500) !important;
+}
+
+/* Empty state */
+.el-empty__description {
+  color: var(--color-text-secondary) !important;
+}
+
+/* Dropdown menus */
+.el-dropdown-menu {
+  border-radius: var(--rp-radius-md) !important;
+  box-shadow: var(--rp-shadow-lg) !important;
+  border: 1px solid var(--color-border) !important;
+  padding: 6px !important;
+}
+
+.el-dropdown-menu__item {
+  border-radius: var(--rp-radius-sm) !important;
+  padding: 8px 12px !important;
+  font-size: 13px;
+}
+
+.el-dropdown-menu__item:hover {
+  background-color: var(--rp-primary-50) !important;
+  color: var(--rp-primary-700) !important;
+}
+
+/* Form items */
+.el-form-item__label {
+  color: var(--color-heading) !important;
+  font-weight: 500 !important;
+}
+
+/* Messages / notifications */
+.el-message {
+  border-radius: var(--rp-radius-md) !important;
+  box-shadow: var(--rp-shadow-lg) !important;
+}
+
+/* Tabs */
+.el-tabs__item {
+  font-weight: 500 !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.el-tabs__item.is-active {
+  color: var(--rp-primary-600) !important;
+}
+
+.el-tabs__active-bar {
+  background-color: var(--rp-primary-500) !important;
+}
+
+/* Step / progress */
+.el-step__head.is-success,
+.el-step__head.is-finish {
+  color: var(--rp-success-500) !important;
+  border-color: var(--rp-success-500) !important;
+}
+
+/* Drawer */
+.el-drawer {
+  border-radius: var(--rp-radius-lg) 0 0 var(--rp-radius-lg) !important;
+  box-shadow: var(--rp-shadow-xl) !important;
+}
+
+/* Popover / tooltip */
+.el-popover {
+  border-radius: var(--rp-radius-md) !important;
+  box-shadow: var(--rp-shadow-lg) !important;
+  border: 1px solid var(--color-border) !important;
+}
+
+/* Loading spinner color */
+.el-loading-spinner .path {
+  stroke: var(--rp-primary-500) !important;
+}

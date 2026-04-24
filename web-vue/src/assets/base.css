@@ -1,0 +1,208 @@
+/* ============================================
+   RAG Platform — Light Design Token System
+   ============================================ */
+
+/* ---- Base primitives ---- */
+:root {
+  /* White scale */
+  --rp-white: #ffffff;
+  --rp-white-soft: #fafbfc;
+  --rp-white-mute: #f4f5f7;
+
+  /* Warm gray scale (text + surfaces) */
+  --rp-gray-50: #f9fafb;
+  --rp-gray-100: #f2f4f6;
+  --rp-gray-200: #e5e7eb;
+  --rp-gray-300: #d1d5db;
+  --rp-gray-400: #9ca3af;
+  --rp-gray-500: #6b7280;
+  --rp-gray-600: #4b5563;
+  --rp-gray-700: #374151;
+  --rp-gray-800: #1f2937;
+  --rp-gray-900: #111827;
+
+  /* Primary accent — warm vibrant blue */
+  --rp-primary-50: #eff6ff;
+  --rp-primary-100: #dbeafe;
+  --rp-primary-200: #bfdbfe;
+  --rp-primary-300: #93c5fd;
+  --rp-primary-400: #60a5fa;
+  --rp-primary-500: #3b82f6;
+  --rp-primary-600: #2563eb;
+  --rp-primary-700: #1d4ed8;
+
+  /* Secondary accent — soft coral for energy */
+  --rp-coral-50: #fff1f2;
+  --rp-coral-100: #ffe4e6;
+  --rp-coral-400: #fb7185;
+  --rp-coral-500: #f43f5e;
+  --rp-coral-600: #e11d48;
+
+  /* Semantic functional colors */
+  --rp-success-50: #f0fdf4;
+  --rp-success-500: #22c55e;
+  --rp-success-600: #16a34a;
+  --rp-warning-50: #fffbeb;
+  --rp-warning-500: #f59e0b;
+  --rp-warning-600: #d97706;
+  --rp-danger-50: #fef2f2;
+  --rp-danger-500: #ef4444;
+  --rp-danger-600: #dc2626;
+  --rp-info-50: #eff6ff;
+  --rp-info-500: #3b82f6;
+
+  /* Shadows (soft, layered) */
+  --rp-shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+  --rp-shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+  --rp-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.03);
+  --rp-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -4px rgba(0, 0, 0, 0.02);
+  --rp-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.02);
+
+  /* Border radius scale */
+  --rp-radius-sm: 6px;
+  --rp-radius-md: 10px;
+  --rp-radius-lg: 14px;
+  --rp-radius-xl: 20px;
+  --rp-radius-full: 9999px;
+
+  /* Transitions */
+  --rp-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --rp-transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --rp-transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ---- Semantic tokens (app-level) ---- */
+:root {
+  /* Backgrounds */
+  --color-background: var(--rp-white-soft);
+  --color-background-elevated: var(--rp-white);
+  --color-background-canvas: var(--rp-gray-50);
+  --color-background-sidebar: var(--rp-white);
+  --color-background-header: var(--rp-white);
+
+  /* Surfaces (cards, panels) */
+  --color-surface: var(--rp-white);
+  --color-surface-hover: var(--rp-gray-50);
+  --color-surface-active: var(--rp-primary-50);
+  --color-surface-muted: var(--rp-gray-100);
+
+  /* Borders */
+  --color-border: var(--rp-gray-200);
+  --color-border-light: var(--rp-gray-100);
+  --color-border-focus: var(--rp-primary-300);
+
+  /* Text */
+  --color-text: var(--rp-gray-800);
+  --color-text-secondary: var(--rp-gray-500);
+  --color-text-tertiary: var(--rp-gray-400);
+  --color-text-inverse: var(--rp-white);
+  --color-text-link: var(--rp-primary-600);
+
+  /* Headings */
+  --color-heading: var(--rp-gray-900);
+  --color-heading-secondary: var(--rp-gray-700);
+
+  /* Accent */
+  --color-accent: var(--rp-primary-500);
+  --color-accent-hover: var(--rp-primary-600);
+  --color-accent-light: var(--rp-primary-50);
+
+  /* Sidebar specific */
+  --sidebar-text: var(--rp-gray-600);
+  --sidebar-text-hover: var(--rp-gray-900);
+  --sidebar-text-active: var(--rp-primary-700);
+  --sidebar-bg-hover: var(--rp-gray-50);
+  --sidebar-bg-active: var(--rp-primary-50);
+  --sidebar-border: var(--rp-gray-200);
+  --sidebar-width: 232px;
+
+  /* Header specific */
+  --header-height: 60px;
+
+  /* Page canvas */
+  --page-padding: 24px;
+  --page-gap: 20px;
+}
+
+/* ============================================
+   Global resets & base styles
+   ============================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--color-text);
+  background: var(--color-background);
+  line-height: 1.6;
+  font-family:
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    'WenQuanYi Micro Hei',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Fira Sans',
+    'Droid Sans',
+    'Helvetica Neue',
+    sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+/* Smooth theme transitions */
+body,
+body * {
+  transition:
+    background-color var(--rp-transition-fast),
+    border-color var(--rp-transition-fast),
+    color var(--rp-transition-fast),
+    box-shadow var(--rp-transition-fast);
+}
+
+/* Selection color */
+::selection {
+  background: var(--rp-primary-200);
+  color: var(--rp-gray-900);
+}
+
+/* Scrollbar styling (WebKit) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--rp-gray-300);
+  border-radius: var(--rp-radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--rp-gray-400);
+}
+
+/* Focus outline */
+:focus-visible {
+  outline: 2px solid var(--rp-primary-300);
+  outline-offset: 2px;
+}
