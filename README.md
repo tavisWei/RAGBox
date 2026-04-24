@@ -249,6 +249,23 @@ cd RAGBox
 
 **Dify 更全，RAGBox 更轻、更聚焦。**
 
+### 与 Dify 的功能对比
+
+> 说明：下表强调的是项目定位和当前仓库呈现出来的能力边界，不代表对 Dify 全部能力的完整覆盖，也不表示 RAGBox 要与 Dify 在所有方向上做一比一竞争。
+
+| 功能项 | Dify | RAGBox |
+|---|---|---|
+| 知识库问答 | 支持 | 支持 |
+| 私有化部署 | 支持 | 支持 |
+| 本地快速启动 | 可实现，但整体更重 | 更强调脚本化直接启动 |
+| 资源分层思路 | 相对不强调 | 强调低 / 中 / 高资源适配 |
+| 多模型接入 | 强 | 已覆盖核心接入方向 |
+| 工作流/编排 | 更完整 | 当前不是核心卖点 |
+| 平台化能力 | 更强 | 当前聚焦知识问答主链路 |
+| 二次开发聚焦度 | 平台能力丰富，改造面更大 | 更适合围绕知识问答直接改造 |
+| 本地轻量体验 | 相对弱一些 | 更强调 |
+| 企业内网知识助手 | 适合 | 适合，且更偏轻量化路线 |
+
 ### 对比同类项目
 
 RAGBox 的优势不在于“功能面最广”，而在于：
@@ -259,6 +276,48 @@ RAGBox 的优势不在于“功能面最广”，而在于：
 - 更适合作为业务改造底座
 
 如果你需要的是一个**聚焦 RAG 私有知识问答**、而不是一整套庞大 AI 平台，那么 RAGBox 会更合适。
+
+---
+
+## English Overview
+
+**RAGBox** is a lightweight, self-hosted RAG knowledge Q&A system built for private deployment.
+
+Instead of becoming an all-in-one AI platform, RAGBox focuses on one thing: making private knowledge retrieval and question answering easier to run, easier to understand, and easier to customize.
+
+### Why RAGBox?
+
+- Lightweight compared with heavyweight LLM platforms
+- Easier local startup experience
+- Better fit for private knowledge base scenarios
+- Easier to customize for business-specific use cases
+- Designed to evolve from local development to enterprise self-hosting
+
+### Quick Start
+
+```bash
+git clone https://github.com/tavisWei/RAGBox.git
+cd RAGBox
+./install.sh
+./start.sh
+```
+
+### Restart
+
+```bash
+./restart.sh
+```
+
+### Default URLs
+
+- Frontend: http://localhost:3003
+- Backend: http://localhost:8000
+- Health Check: http://localhost:8000/api/v1/health
+
+### Default Admin
+
+- Email: `admin@example.com`
+- Password: `admin`
 
 ---
 
@@ -391,6 +450,48 @@ curl http://localhost:8000/api/v1/health
 ./restart.sh
 ```
 
+### 如何参与开发
+
+推荐的参与方式：
+
+1. Fork 本仓库
+2. 创建新的开发分支
+3. 完成修改并自测
+4. 提交 commit
+5. 发起 Pull Request
+
+示例流程：
+
+```bash
+git checkout -b feature/your-feature-name
+# 开发与修改
+git add .
+git commit -m "Add your feature"
+git push origin feature/your-feature-name
+```
+
+### 提交建议
+
+- 一个提交尽量只做一件事
+- 文档修改、功能修改、脚本修改尽量分清楚
+- 提交信息尽量清晰表达本次改动目的
+
+推荐提交信息风格：
+
+```text
+Add xxx
+Update xxx
+Fix xxx
+Refactor xxx
+```
+
+### 本地开发建议
+
+- 后端改动后优先验证接口是否正常
+- 前端改动后优先验证页面是否能正常启动
+- 如果涉及启动流程，优先验证 `install.sh` / `start.sh` / `restart.sh`
+- 不要把 `api/data/` 里的运行时数据当成源码提交
+
 ---
 
 ## 项目结构
@@ -441,6 +542,27 @@ RAGBox 适合这些场景：
 
 Apache License 2.0
 
+### Apache License 2.0 说明
+
+RAGBox 采用 Apache License 2.0 开源协议。
+
+这意味着你通常可以：
+
+- 使用本项目
+- 修改本项目
+- 在商业项目中使用本项目
+- 分发你修改后的版本
+
+你需要注意的是：
+
+- 需要保留原始版权和许可证声明
+- 如果你修改了代码，应该清晰标注变更
+- 本项目按“现状”提供，不附带额外担保
+
+如果你准备将 RAGBox 用于企业或商业场景，建议同时让法务或合规团队确认你们的内部使用要求。
+
+> 注意：如果仓库根目录还没有正式的 `LICENSE` 文件，建议补充标准 Apache-2.0 文本文件，以保证仓库协议声明完整。
+
 ---
 
-如果这个项目对你有帮助，欢迎 Star。
+如果这个项目对你有帮助，欢迎 Star。也欢迎提交 Issue、PR 或者基于它继续做行业化产品扩展。
