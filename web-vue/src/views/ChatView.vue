@@ -14,7 +14,7 @@ import {
   Search,
   User,
 } from '@element-plus/icons-vue'
-import { API_BASE_URL, chatRoleApi, conversationApi, knowledgeBaseApi, modelProviderApi, promptApi } from '@/api'
+import { API_BASE_URL, authApi, chatRoleApi, conversationApi, knowledgeBaseApi, modelProviderApi, promptApi } from '@/api'
 import { withTimeout } from '@/api/client'
 import { useClientPagination } from '@/composables/useClientPagination'
 import { useAuthStore } from '@/stores/auth'
@@ -101,7 +101,7 @@ const persistChatState = () => {
     role_id: roleId.value || undefined,
     conversation_id: currentConversationId.value || undefined,
   }).then((response) => {
-    auth.user = response.data.user
+    auth.setUser(response.data.user)
   }).catch(() => {
   })
 }
@@ -432,6 +432,7 @@ const createRole = async () => {
 const onRoleChange = async () => {
   const role = roles.value.find(item => item.id === roleId.value)
   knowledgeBaseIds.value = role?.knowledge_base_ids || (role?.knowledge_base_id ? [role.knowledge_base_id] : [])
+  clearConversationSelection()
   persistChatState()
   await fetchConversations()
   await restoreConversationSelection()
