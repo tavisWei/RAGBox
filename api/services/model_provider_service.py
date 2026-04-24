@@ -7,51 +7,6 @@ from uuid import uuid4
 from .local_store import LocalStore
 
 
-PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
-    "openai": {
-        "label": "OpenAI",
-        "models": [
-            {"id": "gpt-4o-mini", "name": "gpt-4o-mini"},
-            {"id": "gpt-4.1", "name": "gpt-4.1"},
-            {"id": "gpt-3.5-turbo", "name": "gpt-3.5-turbo"},
-        ],
-        "fields": ["api_key", "base_url"],
-        "supports_validate": True,
-    },
-    "anthropic": {
-        "label": "Anthropic",
-        "models": [
-            {"id": "claude-3-5-sonnet", "name": "claude-3-5-sonnet"},
-            {"id": "claude-3-7-sonnet", "name": "claude-3-7-sonnet"},
-        ],
-        "fields": ["api_key", "base_url"],
-        "supports_validate": True,
-    },
-    "ollama": {
-        "label": "Ollama",
-        "models": [
-            {"id": "llama3.1", "name": "llama3.1"},
-            {"id": "qwen2.5", "name": "qwen2.5"},
-            {"id": "mistral", "name": "mistral"},
-        ],
-        "fields": ["base_url"],
-        "supports_validate": True,
-    },
-    "openrouter": {
-        "label": "OpenRouter",
-        "models": [
-            {"id": "openai/gpt-4o-mini", "name": "openai/gpt-4o-mini"},
-            {
-                "id": "anthropic/claude-3.5-sonnet",
-                "name": "anthropic/claude-3.5-sonnet",
-            },
-        ],
-        "fields": ["api_key", "base_url"],
-        "supports_validate": True,
-    },
-}
-
-
 class ModelProviderService:
     def __init__(self) -> None:
         self.store = LocalStore("model_providers.json")
@@ -104,11 +59,8 @@ class ModelProviderService:
             raise ValueError("Provider key is required")
         data = self.store.read()
         custom = data.setdefault("custom_providers", {})
-        deleted = data.setdefault("deleted_providers", [])
-        if key in self._provider_catalog(data) and key not in deleted:
+        if key in custom:
             raise ValueError("Provider already exists")
-        if key in deleted:
-            deleted.remove(key)
         custom[key] = {
             "label": label,
             "models": self._normalize_models(models),
@@ -136,8 +88,6 @@ class ModelProviderService:
         custom = data.setdefault("custom_providers", {})
         if provider not in self._provider_catalog(data):
             raise ValueError("Provider not found")
-        if provider not in custom and provider in PROVIDER_CATALOG:
-            custom[provider] = dict(PROVIDER_CATALOG[provider])
         custom[provider].update(
             {
                 "label": label,
@@ -156,10 +106,6 @@ class ModelProviderService:
         if provider not in self._provider_catalog(data):
             raise ValueError("Provider not found")
         custom.pop(provider, None)
-        if provider in PROVIDER_CATALOG:
-            deleted = data.setdefault("deleted_providers", [])
-            if provider not in deleted:
-                deleted.append(provider)
         data.setdefault("providers", {}).pop(provider, None)
         data.setdefault("active", {}).pop(provider, None)
         data.setdefault("default_model", {}).pop(provider, None)
@@ -168,9 +114,6 @@ class ModelProviderService:
     def add_model(self, provider: str, model_id: str, name: str) -> None:
         data = self.store.read()
         catalog = data.setdefault("custom_providers", {})
-        if provider in PROVIDER_CATALOG and provider not in catalog:
-            catalog[provider] = dict(PROVIDER_CATALOG[provider])
-            catalog[provider]["editable"] = True
         meta = catalog.get(provider)
         if not meta:
             raise ValueError("Provider not found")
@@ -185,9 +128,6 @@ class ModelProviderService:
     ) -> None:
         data = self.store.read()
         catalog = data.setdefault("custom_providers", {})
-        if provider in PROVIDER_CATALOG and provider not in catalog:
-            catalog[provider] = dict(PROVIDER_CATALOG[provider])
-            catalog[provider]["editable"] = True
         meta = catalog.get(provider)
         if not meta:
             raise ValueError("Provider not found")
@@ -207,9 +147,6 @@ class ModelProviderService:
     def delete_model(self, provider: str, model: str) -> None:
         data = self.store.read()
         catalog = data.setdefault("custom_providers", {})
-        if provider in PROVIDER_CATALOG and provider not in catalog:
-            catalog[provider] = dict(PROVIDER_CATALOG[provider])
-            catalog[provider]["editable"] = True
         meta = catalog.get(provider)
         if not meta:
             raise ValueError("Provider not found")
@@ -315,12 +252,9 @@ class ModelProviderService:
         return public
 
     def _provider_catalog(self, data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        catalog = {key: dict(value) for key, value in PROVIDER_CATALOG.items()}
-        for key, value in data.get("custom_providers", {}).items():
-            catalog[key] = dict(value)
-        for key in data.get("deleted_providers", []):
-            catalog.pop(key, None)
-        return catalog
+        return {
+            key: dict(value) for key, value in data.get("custom_providers", {}).items()
+        }
 
     def _normalize_models(self, models: List[Any]) -> List[Dict[str, str]]:
         normalized: List[Dict[str, str]] = []

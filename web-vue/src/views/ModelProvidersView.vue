@@ -302,7 +302,17 @@ watch(providers, () => {
     </div>
 
     <!-- Provider Cards Grid -->
-    <div class="providers-grid">
+    <div v-if="!loading && !providers.length" class="providers-empty surface-card">
+      <el-icon size="28" color="var(--rp-gray-300)"><Connection /></el-icon>
+      <div class="providers-empty-title">暂无模型提供商</div>
+      <div class="providers-empty-desc">当前为完全空白状态，请点击右上角“新增提供商”手动添加。</div>
+      <el-button type="primary" @click="openProviderCreate">
+        <el-icon><Plus /></el-icon>
+        新增提供商
+      </el-button>
+    </div>
+
+    <div v-else class="providers-grid">
       <div
         v-for="provider in paginatedProviders"
         :key="provider.provider"
@@ -525,6 +535,27 @@ watch(providers, () => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
   gap: var(--page-gap);
+}
+
+.providers-empty {
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.providers-empty-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--rp-gray-900);
+}
+
+.providers-empty-desc {
+  max-width: 520px;
+  color: var(--rp-gray-500);
 }
 
 @media (max-width: 640px) {

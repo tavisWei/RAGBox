@@ -104,7 +104,7 @@ class RAGService:
             or "sqlite"
         )
         datastore_config = {
-            "db_path": "data/rag_data.db",
+            "db_path": "api/data/rag.sqlite",
             "vector_enabled": default_config.get("vector_enabled", True),
         }
         if "vector_enabled" in self.config:

@@ -16,7 +16,7 @@ from .exceptions import CollectionNotFoundError
 class SQLiteDataStore(BaseDataStore):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.db_path = config.get("db_path", "data/rag_data.db")
+        self.db_path = config.get("db_path", "api/data/rag.sqlite")
         self.vector_enabled = config.get("vector_enabled", False)
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._init_db()
