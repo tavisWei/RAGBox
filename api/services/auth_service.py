@@ -48,6 +48,7 @@ class AuthService:
             "password_hash": self._hash_password(password),
             "role": "member",
             "name": username or normalized_email.split("@")[0],
+            "chat_context": {},
             "created_at": datetime.utcnow().isoformat(),
         }
         users[user_id] = user
@@ -152,6 +153,26 @@ class AuthService:
         self.user_store.write(users)
         return self._public_user(user)
 
+    def update_chat_context(
+        self,
+        user_id: str,
+        app_id: Optional[str] = None,
+        role_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        users = self.user_store.read()
+        user = users.get(user_id)
+        if not user:
+            raise ValueError("User not found")
+        user["chat_context"] = {
+            "app_id": app_id or None,
+            "role_id": role_id or None,
+            "conversation_id": conversation_id or None,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        self.user_store.write(users)
+        return self._public_user(user)
+
     def _hash_password(self, password: str) -> str:
         return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
@@ -163,6 +184,7 @@ class AuthService:
             "name": user.get("name") or user["username"],
             "role": user.get("role", "member"),
             "status": user.get("status", "active"),
+            "chat_context": user.get("chat_context") or {},
         }
 
 

@@ -40,6 +40,12 @@ class PasswordResetRequest(BaseModel):
     new_password: str
 
 
+class ChatContextRequest(BaseModel):
+    app_id: Optional[str] = None
+    role_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
 def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
         return None
@@ -102,6 +108,23 @@ async def logout(authorization: Optional[str] = Header(None)):
 @router.get("/auth/me")
 async def me(authorization: Optional[str] = Header(None)):
     return _current_user_from_header(authorization)
+
+
+@router.post("/auth/chat-context")
+async def update_chat_context(
+    payload: ChatContextRequest, authorization: Optional[str] = Header(None)
+):
+    user = _current_user_from_header(authorization)
+    try:
+        return {
+            "user": auth_service.update_chat_context(
+                user["id"], payload.app_id, payload.role_id, payload.conversation_id
+            )
+        }
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
 
 @router.get("/auth/users")
