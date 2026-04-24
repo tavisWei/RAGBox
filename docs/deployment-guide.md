@@ -1,6 +1,6 @@
 # Deployment Guide
 
-This guide explains how to deploy the RAG Platform in production for all three resource levels: low, medium, and high.
+This guide explains deployment options for the RAG Platform across low, medium, and high resource tiers. The repository itself only ships application code and local development scripts. Production Docker Compose or Kubernetes manifests should be maintained outside this repository.
 
 ## Table of Contents
 
@@ -30,46 +30,20 @@ Choose the tier that matches your needs. You can migrate between tiers by export
 
 Best for: personal use, small teams, edge deployments, demos.
 
-### Docker Compose
+### Deployment Inputs
 
-```yaml
-version: "3.8"
-
-services:
-  api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
-    ports:
-      - "5001:5001"
-    environment:
-      - DATA_STORE_TYPE=sqlite
-      - SQLITE_DB_PATH=/data/rag_data.db
-    volumes:
-      - sqlite_data:/data
-    restart: unless-stopped
-
-  web:
-    build:
-      context: ./web
-      dockerfile: ../docker/Dockerfile.web
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://api:5001
-    depends_on:
-      - api
-    restart: unless-stopped
-
-volumes:
-  sqlite_data:
-```
+- `DATA_STORE_TYPE=sqlite`
+- `SQLITE_DB_PATH=api/data/rag.sqlite`
+- Persist `api/data/` outside the repository when deploying
+- Build or reverse-proxy the frontend using your own infrastructure manifests
 
 ### Deploy
 
+This repository no longer ships Docker Compose files. For local setup use:
+
 ```bash
-cp docker-compose.low.yml docker-compose.yml
-docker-compose up -d
+./install.sh
+./start.sh
 ```
 
 ### Resource Requirements
@@ -88,63 +62,16 @@ docker-compose up -d
 
 Best for: small to medium businesses, self-hosted production.
 
-### Docker Compose
+### Deployment Inputs
 
-```yaml
-version: "3.8"
-
-services:
-  postgres:
-    image: ankane/pgvector:latest
-    environment:
-      POSTGRES_USER: rag_user
-      POSTGRES_PASSWORD: changeme
-      POSTGRES_DB: rag_platform
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-
-  api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
-    ports:
-      - "5001:5001"
-    environment:
-      - DATA_STORE_TYPE=pgvector
-      - PGVECTOR_HOST=postgres
-      - PGVECTOR_PORT=5432
-      - PGVECTOR_DATABASE=rag_platform
-      - PGVECTOR_USER=rag_user
-      - PGVECTOR_PASSWORD=changeme
-    depends_on:
-      - postgres
-    restart: unless-stopped
-
-  web:
-    build:
-      context: ./web
-      dockerfile: ../docker/Dockerfile.web
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://api:5001
-    depends_on:
-      - api
-    restart: unless-stopped
-
-volumes:
-  pg_data:
-```
+- `DATA_STORE_TYPE=pgvector`
+- `PGVECTOR_HOST`, `PGVECTOR_PORT`, `PGVECTOR_DATABASE`, `PGVECTOR_USER`, `PGVECTOR_PASSWORD`
+- Provide a managed or self-hosted PostgreSQL + pgvector instance outside this repository
+- Keep runtime credentials in environment variables or external secret managers
 
 ### Deploy
 
-```bash
-cp docker-compose.medium.yml docker-compose.yml
-docker-compose up -d
-```
+Use your own Docker/Kubernetes manifests outside this repository, or run locally via `./install.sh` + `./start.sh`.
 
 ### Resource Requirements
 
@@ -176,104 +103,20 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 Best for: large enterprises, high availability, massive scale.
 
-### Docker Compose
+### Deployment Inputs
 
-```yaml
-version: "3.8"
-
-services:
-  es01:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    environment:
-      - node.name=es01
-      - cluster.name=rag-cluster
-      - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - es_data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-    restart: unless-stopped
-
-  api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
-    ports:
-      - "5001:5001"
-    environment:
-      - DATA_STORE_TYPE=elasticsearch
-      - ELASTICSEARCH_HOSTS=http://es01:9200
-    depends_on:
-      - es01
-    restart: unless-stopped
-
-  web:
-    build:
-      context: ./web
-      dockerfile: ../docker/Dockerfile.web
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://api:5001
-    depends_on:
-      - api
-    restart: unless-stopped
-
-volumes:
-  es_data:
-```
+- `DATA_STORE_TYPE=elasticsearch`
+- `ELASTICSEARCH_HOSTS`, `ELASTICSEARCH_USERNAME`, `ELASTICSEARCH_PASSWORD`, `ELASTICSEARCH_API_KEY`
+- Provision the Elasticsearch cluster outside this repository
+- Store secrets in your deployment platform instead of checked-in files
 
 ### Multi-Node Cluster (Production)
 
-For true high availability, deploy a 3-node cluster:
-
-```yaml
-services:
-  es01:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    environment:
-      - node.name=es01
-      - cluster.name=rag-cluster
-      - cluster.initial_master_nodes=es01,es02,es03
-      - discovery.seed_hosts=es02,es03
-      - bootstrap.memory_lock=true
-      - xpack.security.enabled=true
-      - xpack.security.transport.ssl.enabled=true
-      - "ES_JAVA_OPTS=-Xms4g -Xmx4g"
-    ...
-
-  es02:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    environment:
-      - node.name=es02
-      - cluster.name=rag-cluster
-      - cluster.initial_master_nodes=es01,es02,es03
-      - discovery.seed_hosts=es01,es03
-      ...
-
-  es03:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    environment:
-      - node.name=es03
-      - cluster.name=rag-cluster
-      - cluster.initial_master_nodes=es01,es02,es03
-      - discovery.seed_hosts=es01,es02
-      ...
-```
+For high availability, use a dedicated 3-node Elasticsearch cluster managed by your own infrastructure manifests or platform tooling.
 
 ### Deploy
 
-```bash
-cp docker-compose.high.yml docker-compose.yml
-docker-compose up -d
-```
+Use your own production orchestration manifests. This repository only keeps application code and local development scripts.
 
 ### Resource Requirements (Single Node)
 
@@ -303,13 +146,13 @@ docker-compose up -d
 |----------|-------------|---------|
 | `DATA_STORE_TYPE` | Backend type: sqlite, pgvector, elasticsearch | sqlite |
 | `LOG_LEVEL` | Logging level: DEBUG, INFO, WARNING, ERROR | INFO |
-| `API_PORT` | API server port | 5001 |
+| `API_PORT` | API server port | 8000 |
 
 ### SQLite Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SQLITE_DB_PATH` | Path to SQLite database file | data/rag_data.db |
+| `SQLITE_DB_PATH` | Path to SQLite database file | api/data/rag.sqlite |
 | `VECTOR_ENABLED` | Enable vector search in SQLite | false |
 
 ### PostgreSQL Variables
@@ -339,7 +182,7 @@ docker-compose up -d
 ### API Health Check
 
 ```bash
-curl http://localhost:5001/health
+curl http://localhost:8000/api/v1/health
 ```
 
 Expected response:
@@ -347,8 +190,8 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "data_store": "sqlite",
-  "data_store_healthy": true
+  "version": "1.0.0",
+  "uptime_seconds": 12
 }
 ```
 
@@ -386,10 +229,10 @@ Import the dashboard from `monitoring/grafana-dashboard.json` to visualize:
 
 ```bash
 # Backup
-cp data/rag_data.db data/rag_data.db.backup.$(date +%Y%m%d)
+cp api/data/rag.sqlite api/data/rag.sqlite.backup.$(date +%Y%m%d)
 
 # Restore
-cp data/rag_data.db.backup.20240101 data/rag_data.db
+cp api/data/rag.sqlite.backup.20240101 api/data/rag.sqlite
 ```
 
 ### PostgreSQL
@@ -427,9 +270,9 @@ curl -X POST "localhost:9200/_snapshot/my_backup/snapshot_1/_restore"
 1. Back up your data
 2. Review the changelog for breaking changes
 3. Pull the latest code: `git pull origin main`
-4. Update dependencies: `pip install -r requirements.txt`
+4. Update dependencies: `./install.sh`
 5. Run migrations if needed
-6. Restart services: `docker-compose up -d`
+6. Restart services: `./start.sh`
 
 ### Version Compatibility
 
@@ -439,15 +282,11 @@ curl -X POST "localhost:9200/_snapshot/my_backup/snapshot_1/_restore"
 
 ## Troubleshooting
 
-### Container Won't Start
+### App Won't Start
 
 Check logs:
 
-```bash
-docker-compose logs api
-docker-compose logs postgres
-docker-compose logs es01
-```
+Use the foreground output from `./start.sh`, or run backend/frontend commands separately for troubleshooting.
 
 ### Database Connection Failed
 
@@ -483,7 +322,7 @@ Example export/import script:
 from api.core.rag.datasource.unified.data_store_factory import DataStoreFactory
 
 # Export from SQLite
-sqlite = DataStoreFactory.create("sqlite", {"db_path": "data/rag_data.db"})
+sqlite = DataStoreFactory.create("sqlite", {"db_path": "api/data/rag.sqlite"})
 docs = sqlite.search("my_collection", "*", search_method="keyword", top_k=10000)
 
 # Import to PostgreSQL

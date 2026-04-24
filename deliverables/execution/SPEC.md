@@ -70,30 +70,20 @@ api/
 #### TypeScript 代码规范
 - **类型检查**: TypeScript (strict mode)
 - **代码风格**: ESLint + Prettier
-- **组件**: 函数组件 + Hooks
+- **组件**: Vue SFC + Composition API
 
 #### 项目结构
 ```
-web/
-├── app/                          # Next.js App Router
-│   ├── (dashboard)/
-│   │   ├── resource-configs/
-│   │   │   ├── page.tsx
-│   │   │   ├── new/
-│   │   │   └── [id]/
-│   │   ├── datasets/
-│   │   └── monitoring/
-│   ├── api/                      # API Routes
-│   └── layout.tsx
-├── components/
-│   ├── ui/                       # shadcn/ui 组件
-│   ├── resource-config/          # 资源配置组件
-│   ├── monitoring/               # 监控组件
-│   └── common/                   # 通用组件
-├── hooks/                        # 自定义 Hooks
-├── lib/                          # 工具函数
-├── types/                        # TypeScript 类型
-└── styles/                       # 全局样式
+web-vue/
+├── src/
+│   ├── views/                    # 页面级 Vue 视图
+│   ├── components/               # 可复用组件
+│   ├── stores/                   # Pinia 状态管理
+│   ├── router/                   # 路由注册
+│   ├── api/                      # 前端 API 客户端
+│   └── types/                    # TypeScript 类型
+├── public/
+└── package.json
 ```
 
 ### 2.3 数据库规范
@@ -113,14 +103,14 @@ web/
 ### 2.4 测试规范
 
 #### 单元测试
-- **框架**: pytest (后端), Jest (前端)
+- **框架**: pytest (后端)
 - **覆盖率**: > 80%
-- **Mock**: pytest-mock, MSW
+- **前端校验**: `npm run build` + `npm run lint`
 
 #### 集成测试
 - **框架**: pytest + TestClient
 - **数据库**: 独立测试数据库
-- **外部服务**: Docker Compose 启动
+- **外部服务**: 使用独立测试环境或本地依赖，不依赖仓库内编排清单
 
 #### 性能测试
 - **工具**: Locust (后端), Lighthouse (前端)
@@ -220,34 +210,31 @@ Closes #123
 ### 4.2 部署流程
 
 ```bash
-# 1. 构建镜像
-docker build -t rag-platform:v1.0.0 .
+# 1. 安装依赖
+./install.sh
 
-# 2. 推送镜像
-docker push rag-platform:v1.0.0
+# 2. 构建前端产物
+./deploy/deploy.sh
 
-# 3. 部署服务
-docker-compose -f docker-compose.prod.yml up -d
+# 3. 启动服务
+./start.sh
 
 # 4. 健康检查
-curl http://localhost:5001/health
-
-# 5. 监控验证
-# 检查 Grafana 仪表板
+curl http://localhost:8000/api/v1/health
 ```
 
 ### 4.3 回滚流程
 
 ```bash
 # 1. 回滚到上一版本
-docker-compose -f docker-compose.prod.yml pull rag-platform:v0.9.0
-docker-compose -f docker-compose.prod.yml up -d
+git checkout <previous-tag-or-commit>
 
-# 2. 验证服务
-# 检查健康检查端点
+# 2. 重新安装并构建
+./install.sh
+./deploy/deploy.sh
 
-# 3. 监控验证
-# 检查错误率是否恢复
+# 3. 验证服务
+curl http://localhost:8000/api/v1/health
 ```
 
 ## 5. 监控规范
@@ -331,7 +318,7 @@ docker-compose -f docker-compose.prod.yml up -d
 | 变量名 | 说明 | 默认值 | 必填 |
 |--------|------|--------|------|
 | DATA_STORE_TYPE | 数据存储类型 | pgvector | 是 |
-| SQLITE_DB_PATH | SQLite 数据库路径 | data/rag.db | 条件 |
+| SQLITE_DB_PATH | SQLite 数据库路径 | api/data/rag.sqlite | 条件 |
 | PGVECTOR_HOST | PostgreSQL 主机 | localhost | 条件 |
 | PGVECTOR_PORT | PostgreSQL 端口 | 5432 | 条件 |
 | ELASTICSEARCH_HOSTS | ES 节点地址 | http://localhost:9200 | 条件 |
@@ -341,8 +328,11 @@ docker-compose -f docker-compose.prod.yml up -d
 ### 8.2 常用命令
 
 ```bash
+# 安装依赖
+./install.sh
+
 # 启动开发环境
-docker-compose up -d
+./start.sh
 
 # 运行测试
 pytest
@@ -353,11 +343,11 @@ black api/
 # 类型检查
 mypy api/
 
-# 构建镜像
-docker build -t rag-platform:latest .
+# 构建前端
+npm --prefix web-vue run build
 
-# 查看日志
-docker-compose logs -f api
+# 清空本地运行数据
+python scripts/reset_local_data.py
 ```
 
 ### 8.3 参考资源

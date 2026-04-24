@@ -16,9 +16,9 @@ This guide covers how to set up the development environment, run tests, and cont
 
 ## Prerequisites
 
-- Python 3.7 or higher
-- Node.js 18 or higher (for frontend)
-- Docker and Docker Compose (for integration testing)
+- Python 3.10 or higher
+- Node.js 20 or higher
+- npm 10 or higher
 - Git
 
 ## Project Structure
@@ -26,6 +26,7 @@ This guide covers how to set up the development environment, run tests, and cont
 ```
 rag-platform/
 ├── api/                          # Python backend
+│   ├── api/                      # FastAPI route modules
 │   ├── core/
 │   │   └── rag/
 │   │       ├── datasource/
@@ -40,15 +41,21 @@ rag-platform/
 │   │           ├── multi_way_retriever.py
 │   │           ├── fusion_strategies.py
 │   │           └── reranker.py
-│   └── services/
-│       └── resource_config_service.py
-├── web/                          # Next.js frontend
-│   ├── app/                      # App Router pages
-│   ├── components/               # React components
-│   └── lib/                      # Utilities and API client
+│   ├── services/
+│   ├── tests/
+│   └── data/                     # Local runtime data (gitignored)
+├── web-vue/                      # Vue 3 + Vite frontend
+│   ├── src/
+│   │   ├── views/
+│   │   ├── components/
+│   │   ├── stores/
+│   │   └── router/
+│   └── package.json
 ├── docs/                         # Documentation
 ├── deliverables/                 # Design documents
-└── docker/                       # Docker configurations
+├── scripts/                      # Utility scripts
+├── install.sh
+└── start.sh
 ```
 
 ## Setting Up the Development Environment
@@ -60,20 +67,16 @@ git clone https://github.com/your-org/rag-platform.git
 cd rag-platform
 ```
 
-### 2. Set Up Python Environment
+### 2. Install Dependencies
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+./install.sh
 ```
 
-### 3. Set Up Frontend Environment
+### 3. Activate the Virtual Environment
 
 ```bash
-cd web
-npm install
+source .venv/bin/activate
 ```
 
 ### 4. Configure Environment Variables
@@ -82,7 +85,7 @@ Create a `.env` file in the project root:
 
 ```bash
 DATA_STORE_TYPE=sqlite
-SQLITE_DB_PATH=data/rag_data.db
+SQLITE_DB_PATH=api/data/rag.sqlite
 ```
 
 For pgvector development:
@@ -100,7 +103,7 @@ For Elasticsearch development:
 ```bash
 ELASTICSEARCH_HOSTS=http://localhost:9200
 ELASTICSEARCH_USERNAME=elastic
-ELASTICSEARCH_PASSWORD=changeme
+ELASTICSEARCH_PASSWORD=<set-secure-password>
 ```
 
 ## Running Tests
@@ -114,11 +117,12 @@ python -m pytest api/ -v
 ### Run Specific Test Files
 
 ```bash
+python -m pytest api/tests/test_api.py -v
+python -m pytest api/tests/test_integration.py -v
+python -m pytest api/tests/test_workflows.py -v
 python -m pytest api/core/rag/datasource/unified/tests/test_unified_data_store.py -v
 python -m pytest api/core/rag/datasource/unified/tests/test_phase2_data_stores.py -v
-python -m pytest api/core/rag/datasource/unified/tests/test_phase2_retrieval.py -v
 python -m pytest api/core/rag/datasource/unified/tests/test_phase2_resource_config.py -v
-python -m pytest api/core/rag/datasource/unified/tests/test_three_tier_flow.py -v
 ```
 
 ### Run with Coverage
@@ -127,11 +131,12 @@ python -m pytest api/core/rag/datasource/unified/tests/test_three_tier_flow.py -
 python -m pytest api/ --cov=api --cov-report=html --cov-report=term
 ```
 
-### Frontend Tests
+### Frontend Validation
 
 ```bash
-cd web
-npm test
+cd web-vue
+npm run build
+npm run lint
 ```
 
 ## Code Style
@@ -155,7 +160,7 @@ mypy api/
 ### TypeScript
 
 ```bash
-cd web
+cd web-vue
 npm run lint
 npm run format
 ```
@@ -266,26 +271,26 @@ class DataStoreFactory:
 ### Starting the Development Server
 
 ```bash
-cd web
+cd web-vue
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:3000`.
+The frontend will be available at `http://localhost:3003` when started via `../start.sh`.
 
 ### Key Frontend Components
 
 | Component | Path | Purpose |
 |-----------|------|---------|
-| ResourceConfigCard | `web/components/resource-config-card.tsx` | Display config with level badge |
-| ResourceLevelCard | `web/components/resource-level-card.tsx` | Level selection UI |
-| MonitoringDashboard | `web/components/monitoring-dashboard.tsx` | System metrics charts |
-| KnowledgeBaseWizard | `web/components/knowledge-base-wizard.tsx` | 4-step KB creation |
+| ResourceConfigView | `web-vue/src/views/ResourceConfigView.vue` | Resource configuration management |
+| MonitoringView | `web-vue/src/views/MonitoringView.vue` | System metrics and health dashboards |
+| KnowledgeBaseView | `web-vue/src/views/KnowledgeBaseView.vue` | Knowledge base list and entry point |
+| Router | `web-vue/src/router/index.ts` | Frontend route registration |
 
 ### Adding a New Page
 
-1. Create a new directory under `web/app/`
-2. Add `page.tsx` with your component
-3. Update navigation in the layout if needed
+1. Create a new view under `web-vue/src/views/`
+2. Register the route in `web-vue/src/router/index.ts`
+3. Update navigation or menus if needed
 
 ## Troubleshooting
 
@@ -323,7 +328,7 @@ sys.modules["elasticsearch"] = MockElasticsearchModule()
 If you see "Cannot find module" errors, run:
 
 ```bash
-cd web
+cd web-vue
 rm -rf node_modules package-lock.json
 npm install
 ```

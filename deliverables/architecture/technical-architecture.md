@@ -369,7 +369,7 @@ class SQLiteDataStore(BaseDataStore):
     
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
-        self.db_path = config.get("db_path", "data/rag_data.db")
+        self.db_path = config.get("db_path", "api/data/rag.sqlite")
         self.vector_enabled = config.get("vector_enabled", False)
         self._init_db()
     
@@ -1138,133 +1138,30 @@ register_vector_backend("unified", UnifiedVectorAdapter)
 
 ## 5. 部署架构
 
-### 5.1 低资源部署（单机）
+### 5.1 当前仓库交付边界
 
-```yaml
-# docker-compose.low.yml
-version: '3'
-services:
-  dify-api:
-    image: dify-api:latest
-    environment:
-      - DATA_STORE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/data/rag.db
-    volumes:
-      - ./data:/app/data
-    
-  dify-web:
-    image: dify-web:latest
-    ports:
-      - "3000:3000"
-    
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_DB=dify
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=difyai123456
-    volumes:
-      - ./pgdata:/var/lib/postgresql/data
-```
+- 仓库内仅保留应用源码、本地开发脚本与文档
+- 不再附带 Docker Compose、Kubernetes 或云平台编排清单
+- 本地运行数据统一写入 `api/data/`，并由 Git 忽略
 
-### 5.2 中资源部署（标准）
+### 5.2 低资源部署（单机）
 
-```yaml
-# docker-compose.medium.yml
-version: '3'
-services:
-  dify-api:
-    image: dify-api:latest
-    environment:
-      - DATA_STORE_TYPE=pgvector
-      - PGVECTOR_HOST=postgres
-      - PGVECTOR_PORT=5432
-    
-  dify-web:
-    image: dify-web:latest
-    ports:
-      - "3000:3000"
-    
-  postgres:
-    image: pgvector/pgvector:pg15
-    environment:
-      - POSTGRES_DB=dify
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=difyai123456
-    volumes:
-      - ./pgdata:/var/lib/postgresql/data
-    
-  redis:
-    image: redis:6-alpine
-    volumes:
-      - ./redisdata:/data
-```
+- 后端：FastAPI + 本地 SQLite / FTS5
+- 关键环境变量：`DATA_STORE_TYPE=sqlite`、`SQLITE_DB_PATH=api/data/rag.sqlite`
+- 本地安装：`./install.sh`
+- 本地启动：`./start.sh`
 
-### 5.3 高资源部署（集群）
+### 5.3 中资源部署（标准）
 
-```yaml
-# docker-compose.high.yml
-version: '3'
-services:
-  dify-api:
-    image: dify-api:latest
-    environment:
-      - DATA_STORE_TYPE=elasticsearch
-      - ELASTICSEARCH_HOSTS=http://es01:9200,http://es02:9200,http://es03:9200
-    deploy:
-      replicas: 3
-    
-  dify-web:
-    image: dify-web:latest
-    ports:
-      - "3000:3000"
-    deploy:
-      replicas: 2
-    
-  postgres:
-    image: postgres:15
-    environment:
-      - POSTGRES_DB=dify
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=difyai123456
-    volumes:
-      - ./pgdata:/var/lib/postgresql/data
-    
-  es01:
-    image: elasticsearch:8.11.0
-    environment:
-      - node.name=es01
-      - cluster.name=es-cluster
-      - discovery.seed_hosts=es02,es03
-      - cluster.initial_master_nodes=es01,es02,es03
-    volumes:
-      - ./esdata01:/usr/share/elasticsearch/data
-    
-  es02:
-    image: elasticsearch:8.11.0
-    environment:
-      - node.name=es02
-      - cluster.name=es-cluster
-      - discovery.seed_hosts=es01,es03
-      - cluster.initial_master_nodes=es01,es02,es03
-    volumes:
-      - ./esdata02:/usr/share/elasticsearch/data
-    
-  es03:
-    image: elasticsearch:8.11.0
-    environment:
-      - node.name=es03
-      - cluster.name=es-cluster
-      - discovery.seed_hosts=es01,es02
-      - cluster.initial_master_nodes=es01,es02,es03
-    volumes:
-      - ./esdata03:/usr/share/elasticsearch/data
-    
-  redis:
-    image: redis:6-alpine
-    volumes:
-      - ./redisdata:/data
-```
+- 后端：FastAPI + 外部 PostgreSQL / pgvector
+- 关键环境变量：`DATA_STORE_TYPE=pgvector`、`PGVECTOR_HOST`、`PGVECTOR_PORT`、`PGVECTOR_DATABASE`、`PGVECTOR_USER`、`PGVECTOR_PASSWORD`
+- 编排方式：由外部基础设施仓库维护
+
+### 5.4 高资源部署（集群）
+
+- 后端：FastAPI + 外部 Elasticsearch 集群
+- 关键环境变量：`DATA_STORE_TYPE=elasticsearch`、`ELASTICSEARCH_HOSTS`
+- 编排方式：由外部基础设施仓库维护
 
 ---
 
@@ -1283,20 +1180,13 @@ services:
 ### 6.2 健康检查端点
 
 ```python
-# api/health.py
-
-@app.route('/health')
-def health_check():
-    """系统健康检查"""
-    checks = {
-        "api": True,
-        "database": check_database(),
-        "data_store": check_data_store(),
-        "redis": check_redis()
+@app.get("/api/v1/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "version": "1.0.0",
+        "uptime_seconds": 12,
     }
-    
-    status = 200 if all(checks.values()) else 503
-    return jsonify({"status": "healthy" if status == 200 else "unhealthy", "checks": checks}), status
 ```
 
 ---
