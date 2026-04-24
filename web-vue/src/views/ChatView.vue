@@ -17,6 +17,7 @@ import {
 import { API_BASE_URL, chatRoleApi, conversationApi, knowledgeBaseApi, modelProviderApi, promptApi } from '@/api'
 import { withTimeout } from '@/api/client'
 import { useClientPagination } from '@/composables/useClientPagination'
+import { useAuthStore } from '@/stores/auth'
 import type { Conversation, KnowledgeBase, ModelProvider } from '@/types'
 
 interface ChatRole {
@@ -46,6 +47,7 @@ const createMessageId = () => `${Date.now()}-${Math.random().toString(36).slice(
 
 const query = ref('')
 const route = useRoute()
+const auth = useAuthStore()
 const messages = ref<ChatMessageItem[]>([])
 const loading = ref(false)
 const knowledgeBaseIds = ref<string[]>([])
@@ -66,6 +68,76 @@ const roleModel = ref('')
 const promptTemplates = ref<any[]>([])
 const rolePromptTemplateId = ref('')
 const chatMessagesRef = ref<HTMLElement | null>(null)
+
+const CHAT_APP_ID_KEY = 'chat:lastAppId'
+const CHAT_ROLE_ID_KEY = 'chat:lastRoleId'
+const CHAT_CONVERSATION_ID_KEY = 'chat:lastConversationId'
+
+const getRouteAppId = () => (typeof route.query.appId === 'string' && route.query.appId ? route.query.appId : '')
+
+const getStoredChatContext = () => auth.user?.chat_context || {}
+
+const getEffectiveAppId = () => getRouteAppId() || getStoredChatContext().app_id || localStorage.getItem(CHAT_APP_ID_KEY) || ''
+
+const persistChatState = () => {
+  const appId = getEffectiveAppId()
+  if (appId)
+    localStorage.setItem(CHAT_APP_ID_KEY, appId)
+  else
+    localStorage.removeItem(CHAT_APP_ID_KEY)
+
+  if (roleId.value)
+    localStorage.setItem(CHAT_ROLE_ID_KEY, roleId.value)
+  else
+    localStorage.removeItem(CHAT_ROLE_ID_KEY)
+
+  if (currentConversationId.value)
+    localStorage.setItem(CHAT_CONVERSATION_ID_KEY, currentConversationId.value)
+  else
+    localStorage.removeItem(CHAT_CONVERSATION_ID_KEY)
+
+  authApi.updateChatContext({
+    app_id: appId || undefined,
+    role_id: roleId.value || undefined,
+    conversation_id: currentConversationId.value || undefined,
+  }).then((response) => {
+    auth.user = response.data.user
+  }).catch(() => {
+  })
+}
+
+const clearConversationSelection = () => {
+  currentConversationId.value = ''
+  messages.value = []
+  localStorage.removeItem(CHAT_CONVERSATION_ID_KEY)
+}
+
+const findRecentConversationForRole = () => {
+  if (!roleId.value)
+    return conversations.value.find(item => !item.role_id) || null
+  return conversations.value.find(item => item.role_id === roleId.value) || null
+}
+
+const restoreConversationSelection = async () => {
+  if (!conversations.value.length) {
+    clearConversationSelection()
+    return
+  }
+
+  const savedConversationId = localStorage.getItem(CHAT_CONVERSATION_ID_KEY) || ''
+  const serverConversationId = getStoredChatContext().conversation_id || ''
+  const matchesRole = (item: Conversation) => (roleId.value ? item.role_id === roleId.value : !item.role_id)
+  const preferredConversationId = savedConversationId || serverConversationId
+  const savedConversation = preferredConversationId
+    ? conversations.value.find(item => item.id === preferredConversationId && matchesRole(item))
+    : null
+  const targetConversation = savedConversation || findRecentConversationForRole()
+
+  if (targetConversation)
+    await loadConversationMessages(targetConversation.id)
+  else
+    clearConversationSelection()
+}
 
 const currentModels = computed(() => {
   const current = providers.value.find(item => item.provider === provider.value)
@@ -142,9 +214,12 @@ const fetchOptions = async () => {
 }
 
 const fetchConversations = async () => {
-  const appId = route.query.appId
-  if (typeof appId !== 'string' || !appId)
+  const appId = getEffectiveAppId()
+  if (!appId) {
+    conversations.value = []
     return
+  }
+  localStorage.setItem(CHAT_APP_ID_KEY, appId)
   const response = await conversationApi.list(appId)
   conversations.value = response.data
 }
@@ -152,8 +227,8 @@ const fetchConversations = async () => {
 const ensureConversation = async () => {
   if (currentConversationId.value)
     return currentConversationId.value
-  const appId = route.query.appId
-  if (typeof appId !== 'string' || !appId)
+  const appId = getEffectiveAppId()
+  if (!appId)
     return ''
   const role = roles.value.find(item => item.id === roleId.value)
   const kbIds = effectiveKnowledgeBaseIds.value
@@ -166,6 +241,7 @@ const ensureConversation = async () => {
     role_id: role?.id,
   })
   currentConversationId.value = response.data.id
+  persistChatState()
   await fetchConversations()
   return currentConversationId.value
 }
@@ -177,6 +253,7 @@ const loadConversationMessages = async (conversationId: string) => {
     { id: createMessageId(), role: 'user', content: item.query },
     { id: createMessageId(), role: 'assistant', content: item.answer || '' },
   ]))
+  persistChatState()
 }
 
 const scrollToBottom = async () => {
@@ -347,22 +424,21 @@ const createRole = async () => {
   roleProvider.value = ''
   roleModel.value = ''
   rolePromptTemplateId.value = ''
-  currentConversationId.value = ''
-  messages.value = []
+  clearConversationSelection()
+  persistChatState()
   ElMessage.success('角色已创建并切换')
 }
 
-const onRoleChange = () => {
+const onRoleChange = async () => {
   const role = roles.value.find(item => item.id === roleId.value)
   knowledgeBaseIds.value = role?.knowledge_base_ids || (role?.knowledge_base_id ? [role.knowledge_base_id] : [])
-  currentConversationId.value = ''
-  messages.value = []
-  fetchConversations()
+  persistChatState()
+  await fetchConversations()
+  await restoreConversationSelection()
 }
 
 const startNewConversation = () => {
-  currentConversationId.value = ''
-  messages.value = []
+  clearConversationSelection()
 }
 
 const openHistory = () => {
@@ -371,14 +447,19 @@ const openHistory = () => {
 
 onMounted(() => {
   fetchOptions().then(() => {
+    const savedRoleId = getStoredChatContext().role_id || localStorage.getItem(CHAT_ROLE_ID_KEY) || ''
     const routeProvider = route.query.provider
     const routeModel = route.query.model
     if (typeof routeProvider === 'string')
       provider.value = routeProvider
     if (typeof routeModel === 'string')
       model.value = routeModel
+    if (savedRoleId)
+      roleId.value = savedRoleId
+  }).then(async () => {
+    await fetchConversations()
+    await restoreConversationSelection()
   })
-  fetchConversations()
 })
 
 watch(conversations, () => {
@@ -387,6 +468,12 @@ watch(conversations, () => {
 
 watch(roleId, () => {
   resetConversationPagination()
+})
+
+watch(() => route.query.appId, async () => {
+  persistChatState()
+  await fetchConversations()
+  await restoreConversationSelection()
 })
 </script>
 

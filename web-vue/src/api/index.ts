@@ -80,6 +80,7 @@ export const authApi = {
   register: (data: { email: string; password: string; username?: string }) => api.post('/auth/register', data),
   logout: () => api.post('/auth/logout'),
   me: () => api.get('/auth/me'),
+  updateChatContext: (data: { app_id?: string; role_id?: string; conversation_id?: string }) => api.post('/auth/chat-context', data),
   users: () => api.get('/auth/users'),
   changePassword: (data: { old_password: string; new_password: string }) => api.post('/auth/change-password', data),
   updateUser: (id: string, data: { role?: string; status?: string; name?: string }) => api.put(`/auth/users/${id}`, data),

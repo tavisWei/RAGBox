@@ -100,6 +100,12 @@ export interface User {
   email?: string
   name?: string
   role: string
+  chat_context?: {
+    app_id?: string | null
+    role_id?: string | null
+    conversation_id?: string | null
+    updated_at?: string | null
+  }
 }
 
 export interface ModelProviderCredential {
