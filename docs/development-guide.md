@@ -28,6 +28,14 @@ rag-platform/
 ├── api/                          # Python backend
 │   ├── api/                      # FastAPI route modules
 │   ├── core/
+│   │   ├── workflow/             # LangGraph workflow engine
+│   │   │   ├── compiler.py       # DSL -> StateGraph
+│   │   │   ├── executor.py       # per-node executors
+│   │   │   ├── nodes.py          # node factory (interrupt/retry glue)
+│   │   │   ├── runner.py         # run / resume / stream entrypoints
+│   │   │   ├── llm.py            # LangChain chat models
+│   │   │   ├── tools.py          # LangChain tool registry
+│   │   │   ├── dsl.py / template.py / state.py / checkpointer.py
 │   │   └── rag/
 │   │       ├── datasource/
 │   │       │   └── unified/      # Unified data layer
@@ -35,6 +43,9 @@ rag-platform/
 │   │       │       ├── sqlite_data_store.py
 │   │       │       ├── pgvector_data_store.py
 │   │       │       ├── elasticsearch_data_store.py
+│   │       │       ├── qdrant_data_store.py
+│   │       │       ├── milvus_data_store.py
+│   │       │       ├── mysql_data_store.py
 │   │       │       ├── data_store_factory.py
 │   │       │       └── tests/
 │   │       └── retrieval/        # Enhanced retrieval engine

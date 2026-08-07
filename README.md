@@ -83,11 +83,20 @@ RAGBox 的设计思路是让同一套项目能够覆盖不同资源条件下的�
 
 项目对底层数据存储做了统一抽象，目标是让不同后端具备一致的接入方式，降低迁移和切换成本。
 
-当前主要面向：
+当前已实现的检索后端：
 
-- SQLite
-- PostgreSQL + pgvector
-- Elasticsearch
+- SQLite（内置默认，FTS5 全文 + 向量）
+- PostgreSQL + pgvector（HNSW 向量索引 + tsvector/trgm 全文）
+- Elasticsearch（dense_vector + kNN + RRF）
+- Qdrant（REST API）
+- Milvus（pymilvus，HNSW）
+- MySQL（BLOB 向量 + ngram 全文，适合中小规模）
+
+后端选择支持三级覆盖：**知识库级配置 > `DATA_STORE_TYPE` 环境变量 > 组件配置页启用项 > 方案预设**，入库与问答路径一致生效；组件配置页与知识库设置页均提供参数填写与连通性测试。
+
+### 工作流编排（LangGraph）
+
+工作流引擎基于 **LangGraph** 实现：DSL 编译为 StateGraph，节点调度、并行分支、条件路由、审批中断/恢复、执行检查点、逐节点流式输出均由框架承载；节点级重试与超时使用 LangGraph RetryPolicy/timeout；LLM 节点经 **LangChain** chat model 调用，工具节点对接 LangChain 工具注册表。
 
 ### 多模型支持
 
@@ -218,8 +227,9 @@ cd RAGBox
 | Web 框架 | FastAPI | API 服务 |
 | 数据验证 | Pydantic | 请求/响应模型 |
 | ORM/数据抽象 | SQLAlchemy | 数据访问 |
-| 向量检索 | pgvector / ES dense_vector | 语义检索 |
-| 全文检索 | SQLite FTS5 / PostgreSQL / ES | 文本检索 |
+| 工作流引擎 | LangGraph + LangChain | 可视化工作流编排与执行 |
+| 向量检索 | pgvector / ES dense_vector / Qdrant / Milvus | 语义检索 |
+| 全文检索 | SQLite FTS5 / PostgreSQL / ES / MySQL ngram | 文本检索 |
 | 文档解析 | pypdf / python-docx / BeautifulSoup 等 | 文档处理 |
 
 **前端技术栈：**
@@ -403,12 +413,18 @@ curl http://localhost:8000/api/v1/health
 | `DATA_STORE_TYPE` | 存储后端类型 | `sqlite` |
 | `RESOURCE_LEVEL` | 资源级别 | `medium` |
 | `SQLITE_DB_PATH` | SQLite 数据库路径 | `api/data/rag.sqlite` |
+| `PGVECTOR_DSN` | pgvector 连接串（优先于分项配置） | 空 |
 | `PGVECTOR_HOST` | PostgreSQL 主机 | `localhost` |
 | `PGVECTOR_PORT` | PostgreSQL 端口 | `5432` |
 | `PGVECTOR_DATABASE` | PostgreSQL 数据库名 | `ragbox` |
 | `PGVECTOR_USER` | PostgreSQL 用户名 | `ragbox` |
 | `PGVECTOR_PASSWORD` | PostgreSQL 密码 | 空 |
 | `ELASTICSEARCH_HOSTS` | Elasticsearch 地址 | `http://localhost:9200` |
+| `QDRANT_URL` | Qdrant 地址 | `http://localhost:6333` |
+| `QDRANT_API_KEY` | Qdrant API Key | 空 |
+| `MILVUS_HOST` / `MILVUS_PORT` | Milvus 地址 | `localhost` / `19530` |
+| `MYSQL_HOST` 等 | MySQL 连接参数（MYSQL_PORT/DATABASE/USER/PASSWORD） | 见组件配置页 |
+| `QA_GENERATION_PROVIDER` / `QA_GENERATION_MODEL` | QA 索引模式的 LLM 生成供应商与模型 | 空（不启用） |
 | `OPENAI_API_KEY` | OpenAI API Key | 空 |
 | `OLLAMA_BASE_URL` | Ollama 地址 | `http://localhost:11434` |
 | `API_PORT` | 后端端口 | `8000` |
@@ -424,9 +440,11 @@ curl http://localhost:8000/api/v1/health
 - 文档导入与处理
 - 文本分块
 - Embedding 接入
-- 检索召回
+- 检索召回（向量 + 全文 + jieba 关键词多路）
 - 融合与重排
-- 基于知识库的问答
+- 基于知识库的问答（含真流式输出）
+- 可视化工作流编排（LangGraph 引擎，含审批中断/恢复）
+- 多检索后端切换（SQLite / pgvector / ES / Qdrant / Milvus / MySQL）
 - 前后端联调运行
 
 也就是说，它已经不是一个空壳概念项目，而是一个具备基本产品形态、适合继续工程化和业务化扩展的 RAG 私有知识问答项目。
@@ -535,6 +553,8 @@ RAGBox 适合这些场景：
 - [部署指南](docs/deployment-guide.md)
 - [API 文档](docs/api-documentation.md)
 - [技术架构文档](deliverables/architecture/technical-architecture.md)
+- [工作流引擎 LangGraph 迁移方案](deliverables/architecture/langgraph-migration-plan.md)
+- [RAG 链路实施记录](deliverables/architecture/rag-hardening-plan.md)
 
 ---
 
