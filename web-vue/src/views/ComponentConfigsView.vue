@@ -1,13 +1,104 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { componentConfigApi } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { componentConfigApi, storageApi } from '@/api'
 import { useClientPagination } from '@/composables/useClientPagination'
 
 const components = ref<any[]>([])
 const runtimeDataStore = ref('sqlite')
 const loading = ref(false)
 const testingId = ref<string | null>(null)
+
+// Storage management state
+const businessStore = ref<any>({ type: 'local', namespaces: [] })
+const activeVectorStore = ref<any>(null)
+const mysqlForm = ref({ host: 'localhost', port: 3306, database: 'rag_platform', user: 'root', password: '' })
+const migrating = ref(false)
+const testingBusiness = ref(false)
+const vectorSwitchTarget = ref('')
+const switchingVector = ref(false)
+
+const fetchStorage = async () => {
+  try {
+    const response = await storageApi.status()
+    businessStore.value = response.data.business_store || { type: 'local', namespaces: [] }
+    activeVectorStore.value = response.data.vector_store
+  }
+  catch {
+    // 非管理员或无权限时忽略，存储管理卡片保持默认展示
+  }
+}
+
+const testBusinessStore = async () => {
+  testingBusiness.value = true
+  try {
+    await storageApi.testBusiness({ type: 'mysql', config: mysqlForm.value })
+    ElMessage.success('MySQL 连接测试通过')
+  }
+  catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || 'MySQL 连接失败')
+  }
+  finally {
+    testingBusiness.value = false
+  }
+}
+
+const migrateBusinessStore = async (target: string) => {
+  const action = target === 'mysql' ? '迁移到 MySQL 并切换' : '迁回本地 JSON 存储'
+  try {
+    await ElMessageBox.confirm(
+      `将把全部业务数据（用户、会话、应用、知识库配置等 ${businessStore.value.namespaces?.length || 0} 个命名空间）${action}。迁移完成并逐条校验后才会切换，源数据保留可回退。是否继续？`,
+      '业务数据库迁移',
+      { type: 'warning', confirmButtonText: '迁移并切换', cancelButtonText: '取消' },
+    )
+  }
+  catch {
+    return
+  }
+  migrating.value = true
+  try {
+    const config = target === 'mysql' ? mysqlForm.value : {}
+    const response = await storageApi.migrateBusiness({ type: target, config })
+    ElMessage.success(`已切换业务存储：${response.data.from} → ${response.data.to}（${response.data.namespaces.length} 个命名空间）`)
+    await fetchStorage()
+  }
+  catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '迁移失败，未切换')
+  }
+  finally {
+    migrating.value = false
+  }
+}
+
+const switchVectorStore = async () => {
+  if (!vectorSwitchTarget.value) {
+    ElMessage.warning('请选择目标向量后端')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '向量数据不会跨后端迁移。切换后，已有知识库的训练素材（文档）需要重新导入以在新后端重建索引。是否继续？',
+      '切换向量后端',
+      { type: 'warning', confirmButtonText: '直接切换', cancelButtonText: '取消' },
+    )
+  }
+  catch {
+    return
+  }
+  switchingVector.value = true
+  try {
+    const response = await storageApi.switchVector(vectorSwitchTarget.value)
+    ElMessage.success(response.data.message || '向量后端已切换')
+    await fetchStorage()
+    await fetchComponents()
+  }
+  catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '切换失败')
+  }
+  finally {
+    switchingVector.value = false
+  }
+}
 
 const {
   currentPage,
@@ -60,6 +151,7 @@ const categoryMeta: Record<string, { label: string; icon: string; color: string 
 
 onMounted(() => {
   fetchComponents()
+  fetchStorage()
 })
 
 watch(components, () => {
@@ -81,14 +173,74 @@ watch(components, () => {
     <div class="runtime-alert surface-card">
       <el-icon class="alert-icon" size="20"><WarningFilled /></el-icon>
       <div class="alert-content">
-        <strong>运行时存储后端：{{ runtimeDataStore }}</strong>
-        <span>修改此页配置不会立即切换运行中服务，请同步部署环境变量并重启后端。</span>
+        <strong>运行时向量后端：{{ activeVectorStore?.data_store_type || runtimeDataStore }}</strong>
+        <span>启用的数据存储组件即为全局生效的检索后端；知识库级配置与环境变量 DATA_STORE_TYPE 优先级更高。</span>
+      </div>
+    </div>
+
+    <!-- Storage Management -->
+    <div class="surface-card section-card storage-card">
+      <div class="section-header">
+        <div class="section-title">
+          <el-icon size="18" class="text-accent"><Folder /></el-icon>
+          <span>存储管理</span>
+        </div>
+      </div>
+      <div class="storage-grid">
+        <div class="storage-block">
+          <div class="storage-title">业务数据库（当前：{{ businessStore.type === 'mysql' ? 'MySQL' : '本地 JSON' }}）</div>
+          <div class="storage-desc">用户、会话、应用、知识库配置等业务数据。迁移会先复制并逐条校验，成功后才切换，源数据保留可回退。</div>
+          <template v-if="businessStore.type !== 'mysql'">
+            <el-form label-width="80px" size="small">
+              <el-form-item label="主机/端口">
+                <div style="display: flex; gap: 8px; width: 100%">
+                  <el-input v-model="mysqlForm.host" style="flex: 1" />
+                  <el-input-number v-model="mysqlForm.port" :min="1" :max="65535" style="width: 120px" />
+                </div>
+              </el-form-item>
+              <el-form-item label="数据库名">
+                <el-input v-model="mysqlForm.database" />
+              </el-form-item>
+              <el-form-item label="账号">
+                <el-input v-model="mysqlForm.user" />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input v-model="mysqlForm.password" type="password" show-password />
+              </el-form-item>
+            </el-form>
+            <div class="storage-actions">
+              <el-button size="small" :loading="testingBusiness" @click="testBusinessStore">测试连接</el-button>
+              <el-button size="small" type="primary" :loading="migrating" @click="migrateBusinessStore('mysql')">迁移并切换到 MySQL</el-button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="storage-actions">
+              <el-button size="small" :loading="migrating" @click="migrateBusinessStore('local')">迁回本地 JSON 存储</el-button>
+            </div>
+          </template>
+        </div>
+        <div class="storage-block">
+          <div class="storage-title">向量 / 检索后端（当前：{{ activeVectorStore?.data_store_type || runtimeDataStore }}）</div>
+          <div class="storage-desc">向量数据不跨后端迁移；切换后各知识库会标记"需重建索引"，训练素材需重新导入。</div>
+          <div class="storage-actions">
+            <el-select v-model="vectorSwitchTarget" placeholder="选择目标后端" size="small" style="width: 220px">
+              <el-option label="SQLite（本地内置）" value="sqlite" />
+              <el-option label="PostgreSQL + pgvector" value="pgvector" />
+              <el-option label="Elasticsearch" value="elasticsearch" />
+              <el-option label="Qdrant" value="qdrant" />
+              <el-option label="Milvus" value="milvus" />
+              <el-option label="MySQL" value="mysql" />
+            </el-select>
+            <el-button size="small" type="primary" :loading="switchingVector" @click="switchVectorStore">切换</el-button>
+          </div>
+          <div class="storage-desc">提示：目标后端的连接参数请先在下方对应组件卡片中填写并保存。</div>
+        </div>
       </div>
     </div>
 
     <div class="architecture-note surface-card">
       <strong>RAG 三层成本架构</strong>
-      <span>轻量起步：SQLite 本地混合检索；团队标准：PostgreSQL + pgvector；企业增强：Elasticsearch 集群，后续可迁移 Qdrant/Milvus 专用向量库。MySQL 用于业务数据，不作为知识库向量检索后端。</span>
+      <span>轻量起步：SQLite 本地混合检索；团队标准：PostgreSQL + pgvector；企业增强：Elasticsearch 集群，亦可选用 Qdrant/Milvus 专用向量库或 MySQL（中小规模）。</span>
     </div>
 
     <!-- Component Cards Grid -->
@@ -197,6 +349,47 @@ watch(components, () => {
 <style scoped>
 .component-configs-view {
   padding: var(--page-padding);
+}
+
+.storage-card {
+  padding: 14px 18px;
+  margin-bottom: var(--page-gap);
+}
+
+.section-header {
+  margin-bottom: 12px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.storage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.storage-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.storage-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.storage-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .runtime-alert {

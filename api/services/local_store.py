@@ -1,42 +1,42 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict
 
+from api.services.business_store import manager
+
 
 class LocalStore:
+    """Whole-namespace dict store.
+
+    Despite the name this is now a thin shell: every operation is delegated
+    to the active business-store backend (local JSON files by default,
+    MySQL when switched). The constructor argument keeps the historical
+    "<namespace>.json" form.
+    """
+
     _lock = Lock()
 
     def __init__(self, filename: str) -> None:
-        base_dir = Path(__file__).resolve().parent.parent / "data"
-        base_dir.mkdir(parents=True, exist_ok=True)
-        self.file_path = base_dir / filename
-        if not self.file_path.exists():
-            self._write({})
+        self.namespace = filename[: -len(".json")] if filename.endswith(".json") else filename
+        # Preserve the historical side effect: the namespace exists after init.
+        backend = manager.get_backend()
+        if backend.read_namespace(self.namespace) == {}:
+            backend.write_namespace(self.namespace, {})
 
     def read(self) -> Dict[str, Any]:
         with self._lock:
-            if not self.file_path.exists():
-                return {}
-            return json.loads(self.file_path.read_text(encoding="utf-8"))
+            return manager.get_backend().read_namespace(self.namespace)
 
     def write(self, data: Dict[str, Any]) -> None:
         with self._lock:
-            self._write(data)
+            manager.get_backend().write_namespace(self.namespace, data)
 
     def update(
         self, updater: Callable[[Dict[str, Any]], Dict[str, Any]]
     ) -> Dict[str, Any]:
         with self._lock:
-            current = self.read()
+            current = manager.get_backend().read_namespace(self.namespace)
             updated = updater(current)
-            self._write(updated)
+            manager.get_backend().write_namespace(self.namespace, updated)
             return updated
-
-    def _write(self, data: Dict[str, Any]) -> None:
-        self.file_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )

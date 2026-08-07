@@ -136,6 +136,13 @@ export const componentConfigApi = {
   test: (id: string) => api.post(`/component-configs/${id}/test`),
 }
 
+export const storageApi = {
+  status: () => api.get('/system/storage'),
+  testBusiness: (data: { type: string; config?: Record<string, any> }) => api.post('/system/storage/business/test', data),
+  migrateBusiness: (data: { type: string; config?: Record<string, any> }) => api.post('/system/storage/business/migrate', data),
+  switchVector: (componentId: string) => api.post('/system/storage/vector/switch', { component_id: componentId }),
+}
+
 export const workflowApi = {
   list: (appId?: string) => api.get('/workflows', { params: { app_id: appId } }),
   create: (data: { app_id: string; name: string; description?: string }) => api.post('/workflows', data),
