@@ -79,3 +79,17 @@ class BaseDataStore(ABC):
     @abstractmethod
     def health_check(self) -> bool:
         raise NotImplementedError
+
+    def list_documents(self, collection_name: str) -> List[Dict[str, Any]]:
+        """Return all documents of a collection as {doc_id, content, metadata}.
+
+        Optional capability used to rebuild the in-memory keyword index;
+        backends that don't implement it simply return nothing.
+        """
+        return []
+
+    def get_documents_by_ids(
+        self, collection_name: str, doc_ids: List[str]
+    ) -> List[SearchResult]:
+        """Fetch documents by id, preserving the given id order."""
+        return []

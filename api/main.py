@@ -34,6 +34,9 @@ start_time = time.time()
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     yield
+    from api.core.workflow.checkpointer import close_all_checkpointers
+
+    await close_all_checkpointers()
 
 
 # Create FastAPI app

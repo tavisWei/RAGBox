@@ -17,6 +17,26 @@ class ComponentConfigService:
     def _ensure_defaults(self) -> None:
         data = self.store.read()
         if data.get("components"):
+            # Migration: qdrant/milvus gained real store implementations,
+            # mysql became a usable retrieval backend.
+            changed = False
+            for cid, name in (("qdrant", "Qdrant 专用向量库"), ("milvus", "Milvus 企业级向量库")):
+                record = data["components"].get(cid)
+                if record and "规划中" in str(record.get("config", {}).get("status", "")):
+                    record["name"] = name
+                    record["config"].pop("status", None)
+                    changed = True
+            mysql_record = data["components"].get("mysql")
+            if mysql_record and "不作为" in str(
+                mysql_record.get("config", {}).get("role", "")
+            ):
+                mysql_record["name"] = "MySQL 数据库"
+                mysql_record["config"]["role"] = (
+                    "可作为检索后端（BLOB 向量 + ngram 全文），向量检索为暴力余弦，适合中小规模"
+                )
+                changed = True
+            if changed:
+                self.store.write(data)
             return
         data["components"] = {
             "sqlite": {
@@ -30,7 +50,7 @@ class ComponentConfigService:
             },
             "mysql": {
                 "id": "mysql",
-                "name": "MySQL 业务数据库",
+                "name": "MySQL 数据库",
                 "category": "database",
                 "enabled": False,
                 "config": {
@@ -39,7 +59,7 @@ class ComponentConfigService:
                     "database": os.getenv("MYSQL_DATABASE", "rag_platform"),
                     "username": os.getenv("MYSQL_USER", "root"),
                     "password": os.getenv("MYSQL_PASSWORD", ""),
-                    "role": "业务数据/用户/应用配置，不作为知识库向量检索后端",
+                    "role": "可作为检索后端（BLOB 向量 + ngram 全文），向量检索为暴力余弦，适合中小规模",
                 },
                 "env_keys": [
                     "DATABASE_URL",
@@ -93,26 +113,24 @@ class ComponentConfigService:
             },
             "qdrant": {
                 "id": "qdrant",
-                "name": "Qdrant 专用向量库（规划）",
+                "name": "Qdrant 专用向量库",
                 "category": "vector_store",
                 "enabled": False,
                 "config": {
                     "url": os.getenv("QDRANT_URL", "http://localhost:6333"),
                     "api_key": os.getenv("QDRANT_API_KEY", ""),
-                    "status": "规划中：推荐作为企业增强后的专用向量库升级路径",
                 },
                 "env_keys": ["QDRANT_URL", "QDRANT_API_KEY"],
                 "updated_at": datetime.utcnow().isoformat(),
             },
             "milvus": {
                 "id": "milvus",
-                "name": "Milvus 企业级向量库（规划）",
+                "name": "Milvus 企业级向量库",
                 "category": "vector_store",
                 "enabled": False,
                 "config": {
                     "host": os.getenv("MILVUS_HOST", "localhost"),
                     "port": os.getenv("MILVUS_PORT", "19530"),
-                    "status": "规划中：适合超大规模/多租户/分布式企业部署",
                 },
                 "env_keys": ["MILVUS_HOST", "MILVUS_PORT"],
                 "updated_at": datetime.utcnow().isoformat(),
@@ -128,11 +146,122 @@ class ComponentConfigService:
             item = dict(component)
             item["active"] = item["id"] == current_store
             item["runtime_note"] = (
-                "当前运行时读取环境变量；这里保存连接参数供管理员记录和连通性检查，不会热切换运行中存储。"
+                "启用（enabled）的数据存储组件会作为全局默认检索后端注入运行时；"
+                "知识库级配置与环境变量 DATA_STORE_TYPE 优先级更高。"
             )
             item["config"] = self._mask_config(item.get("config", {}))
             components.append(item)
         return {"data": components, "runtime_data_store": current_store}
+
+    # Component ids that can act as the retrieval datastore.
+    DATASTORE_COMPONENT_IDS = (
+        "sqlite",
+        "pgvector",
+        "elasticsearch",
+        "qdrant",
+        "milvus",
+        "mysql",
+    )
+
+    @staticmethod
+    def _component_to_store_config(component: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Map a component record to (store_type, store kwargs)."""
+        cid = component.get("id")
+        config = component.get("config", {})
+        if cid == "sqlite":
+            return {
+                "data_store_type": "sqlite",
+                "datastore": {
+                    "db_path": config.get("path") or "api/data/rag.sqlite"
+                },
+            }
+        if cid == "pgvector":
+            fields: Dict[str, Any] = {}
+            if config.get("host"):
+                fields["host"] = config["host"]
+            if config.get("port"):
+                fields["port"] = int(config["port"])
+            if config.get("database"):
+                fields["database"] = config["database"]
+            if config.get("username"):
+                fields["user"] = config["username"]
+            if config.get("password"):
+                fields["password"] = config["password"]
+            result: Dict[str, Any] = {"data_store_type": "pgvector"}
+            if fields:
+                result["datastore"] = fields
+            return result
+        if cid == "elasticsearch":
+            es_config: Dict[str, Any] = {}
+            if config.get("hosts"):
+                es_config["hosts"] = [
+                    h.strip() for h in str(config["hosts"]).split(",") if h.strip()
+                ]
+            if config.get("username"):
+                es_config["username"] = config["username"]
+            if config.get("password"):
+                es_config["password"] = config["password"]
+            result = {"data_store_type": "elasticsearch"}
+            if es_config:
+                result["datastore"] = es_config
+            return result
+        if cid == "qdrant":
+            qdrant_config: Dict[str, Any] = {}
+            if config.get("url"):
+                qdrant_config["url"] = config["url"]
+            if config.get("api_key"):
+                qdrant_config["api_key"] = config["api_key"]
+            result = {"data_store_type": "qdrant"}
+            if qdrant_config:
+                result["datastore"] = qdrant_config
+            return result
+        if cid == "milvus":
+            milvus_config: Dict[str, Any] = {}
+            if config.get("host"):
+                milvus_config["host"] = config["host"]
+            if config.get("port"):
+                milvus_config["port"] = int(config["port"])
+            result = {"data_store_type": "milvus"}
+            if milvus_config:
+                result["datastore"] = milvus_config
+            return result
+        if cid == "mysql":
+            mysql_config: Dict[str, Any] = {}
+            if config.get("host"):
+                mysql_config["host"] = config["host"]
+            if config.get("port"):
+                mysql_config["port"] = int(config["port"])
+            if config.get("database"):
+                mysql_config["database"] = config["database"]
+            if config.get("username"):
+                mysql_config["user"] = config["username"]
+            if config.get("password"):
+                mysql_config["password"] = config["password"]
+            result = {"data_store_type": "mysql"}
+            if mysql_config:
+                result["datastore"] = mysql_config
+            return result
+        return None
+
+    def get_active_datastore(self) -> Optional[Dict[str, Any]]:
+        """Return the global datastore selection from the components page.
+
+        An enabled datastore component is the deployment-wide default. When
+        several are enabled, a non-SQLite backend wins over SQLite. Returns
+        None when no datastore component is enabled.
+        """
+        data = self.store.read()
+        enabled = [
+            component
+            for component in data.get("components", {}).values()
+            if component.get("id") in self.DATASTORE_COMPONENT_IDS
+            and component.get("enabled")
+        ]
+        if not enabled:
+            return None
+        non_sqlite = [c for c in enabled if c.get("id") != "sqlite"]
+        chosen = non_sqlite[0] if non_sqlite else enabled[0]
+        return self._component_to_store_config(chosen)
 
     def update_component(
         self, component_id: str, config: Dict[str, Any], enabled: bool
@@ -161,37 +290,37 @@ class ComponentConfigService:
         if not record:
             raise ValueError("Component not found")
         config = record.get("config", {})
-        if component_id == "sqlite":
-            return {
-                "result": "success",
-                "message": "SQLite 使用本地文件，无需网络连接。",
-            }
-        if component_id in {"pgvector", "mysql", "milvus"}:
-            return self._test_tcp(
-                config.get("host", "localhost"),
-                int(
-                    config.get("port")
-                    or (
-                        5432
-                        if component_id == "pgvector"
-                        else 3306
-                        if component_id == "mysql"
-                        else 19530
-                    )
-                ),
-                component_id,
-            )
-        if component_id == "elasticsearch":
-            host, port = self._parse_http_host(
-                config.get("hosts", "http://localhost:9200")
-            )
-            return self._test_tcp(host, port, "elasticsearch")
-        if component_id == "qdrant":
-            host, port = self._parse_http_host(
-                config.get("url", "http://localhost:6333")
-            )
-            return self._test_tcp(host, port, "qdrant")
+        if component_id in self.DATASTORE_COMPONENT_IDS:
+            return self._test_datastore(record)
         return {"result": "failed", "message": "Unknown component"}
+
+    def _test_datastore(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Real connectivity check: build the store and run health_check."""
+        from api.core.rag.datasource.unified.data_store_factory import (
+            DataStoreFactory,
+        )
+
+        mapped = self._component_to_store_config(record) or {}
+        store_type = mapped.get("data_store_type", record.get("id"))
+        try:
+            store = DataStoreFactory.create(
+                store_type=store_type, config=mapped.get("datastore") or {}
+            )
+            ok = store.health_check()
+        except Exception as exc:
+            return {
+                "result": "failed",
+                "message": f"{record.get('id')} 初始化/健康检查失败: {exc}",
+            }
+        if not ok:
+            return {
+                "result": "failed",
+                "message": f"{record.get('id')} 健康检查未通过",
+            }
+        return {
+            "result": "success",
+            "message": f"{record.get('id')} 初始化与健康检查通过",
+        }
 
     def _test_tcp(self, host: str, port: int, label: str) -> Dict[str, Any]:
         test_id = str(uuid4())

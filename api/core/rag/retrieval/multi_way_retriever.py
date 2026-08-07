@@ -26,6 +26,7 @@ class MultiWayRetriever:
         fusion_method: str = "rrf",
         reranker: Optional[Reranker] = None,
         max_workers: int = 3,
+        keyword_search: Optional[Callable[[str, str, int], List[SearchResult]]] = None,
     ):
         self.data_store = data_store
         self.config = config or RetrievalConfig.intermediate()
@@ -33,6 +34,8 @@ class MultiWayRetriever:
         self.fusion_method = fusion_method
         self.reranker = reranker
         self.max_workers = max_workers
+        # Optional jieba-backed keyword leg: (collection, query, top_k) -> results
+        self.keyword_search = keyword_search
         self.query_expander = QueryExpander(
             mode=self.config.query_expansion,
             llm_function=llm_function,
@@ -144,6 +147,18 @@ class MultiWayRetriever:
                         "filters": filters,
                     }
                 )
+                if method == "keyword" and self.keyword_search:
+                    tasks.append(
+                        {
+                            "collection_name": collection_name,
+                            "method": "jieba_keyword",
+                            "query": query,
+                            "query_vector": None,
+                            "top_k": top_k,
+                            "score_threshold": score_threshold,
+                            "filters": filters,
+                        }
+                    )
             elif method == "hybrid":
                 if query_vector is not None:
                     tasks.append(
@@ -168,6 +183,18 @@ class MultiWayRetriever:
                         "filters": filters,
                     }
                 )
+                if self.keyword_search:
+                    tasks.append(
+                        {
+                            "collection_name": collection_name,
+                            "method": "jieba_keyword",
+                            "query": query,
+                            "query_vector": None,
+                            "top_k": top_k,
+                            "score_threshold": score_threshold,
+                            "filters": filters,
+                        }
+                    )
         return tasks
 
     def _execute_parallel(self, tasks: List[dict]) -> List[List[SearchResult]]:
@@ -193,6 +220,12 @@ class MultiWayRetriever:
         return result_lists
 
     def _execute_search(self, task: dict) -> List[SearchResult]:
+        if task["method"] == "jieba_keyword":
+            if not self.keyword_search:
+                return []
+            return self.keyword_search(
+                task.get("collection_name", ""), task["query"], task.get("top_k", 10)
+            )
         return self.data_store.search(
             collection_name=task.get("collection_name", ""),
             query=task["query"],

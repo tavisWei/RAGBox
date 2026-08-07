@@ -43,7 +43,7 @@ def build_rag_service(
         raise ValueError("请选择模型提供商或先添加供应商。")
     if not model:
         raise ValueError("请选择要调用的模型。")
-    config: Dict[str, Any] = {"data_store_type": "sqlite"}
+    config: Dict[str, Any] = {}
     kb = {}
     if knowledge_base_id:
         kb = (
@@ -53,6 +53,11 @@ def build_rag_service(
         )
         if kb.get("retrieval_config"):
             config["retrieval_config"] = kb.get("retrieval_config")
+    # Same store-selection rules as the ingestion path: KB-level datastore
+    # config > DATA_STORE_TYPE env > plan recommended_backend > sqlite.
+    from api.api.knowledge_bases import resolve_datastore_config
+
+    config.update(resolve_datastore_config(kb))
     active = model_provider_service.get_active_provider_config(provider)
     if not active:
         raise ValueError(f"Provider '{provider}' is not configured")

@@ -102,6 +102,54 @@ class SQLiteDataStore(BaseDataStore):
             conn.commit()
         return doc_ids
 
+    def list_documents(self, collection_name: str) -> List[Dict[str, Any]]:
+        """Return all documents of a collection as {doc_id, content, metadata}.
+
+        The documents table is global, so membership is determined by the
+        knowledge_base_id metadata field written by RAGService.add_documents.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, content, metadata FROM documents "
+                "WHERE json_extract(metadata, '$.knowledge_base_id') = ?",
+                (collection_name,),
+            ).fetchall()
+        return [
+            {
+                "doc_id": row["id"],
+                "content": row["content"],
+                "metadata": json.loads(row["metadata"] or "{}"),
+            }
+            for row in rows
+        ]
+
+    def get_documents_by_ids(
+        self, collection_name: str, doc_ids: List[str]
+    ) -> List[SearchResult]:
+        if not doc_ids:
+            return []
+        placeholders = ",".join("?" for _ in doc_ids)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT id, content, metadata FROM documents WHERE id IN ({placeholders}) "
+                "AND json_extract(metadata, '$.knowledge_base_id') = ?",
+                (*doc_ids, collection_name),
+            ).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        return [
+            SearchResult(
+                content=by_id[doc_id]["content"],
+                score=0.0,
+                doc_id=doc_id,
+                metadata=json.loads(by_id[doc_id]["metadata"] or "{}"),
+                retrieval_method="keyword",
+            )
+            for doc_id in doc_ids
+            if doc_id in by_id
+        ]
+
     def search(
         self,
         collection_name: str,

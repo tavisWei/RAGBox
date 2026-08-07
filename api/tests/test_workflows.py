@@ -1,4 +1,5 @@
 import asyncio
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -6,9 +7,20 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from api.api import workflows as workflow_module
+from api.core.workflow import executor as executor_module
+from api.core.workflow import runner as workflow_runner
+from api.core.workflow.checkpointer import close_all_checkpointers
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+async def _close_workflow_checkpointers():
+    # Engine runs create aiosqlite-backed savers bound to the running loop;
+    # closing them all keeps the pytest process exit clean.
+    yield
+    await close_all_checkpointers()
 
 
 def auth_headers() -> dict:
@@ -412,7 +424,7 @@ def test_llm_node_does_not_fallback_to_run_payload_model(monkeypatch) -> None:
             raise AssertionError("LLM node used run payload provider/model fallback")
         raise HTTPException(400, "请选择模型提供商或先添加供应商。")
 
-    monkeypatch.setattr(workflow_module, "_resolve_model", fake_resolve_model)
+    monkeypatch.setattr(executor_module, "resolve_model", fake_resolve_model)
     node = {
         "id": "llm",
         "type": "llm",
@@ -429,8 +441,8 @@ def test_llm_node_does_not_fallback_to_run_payload_model(monkeypatch) -> None:
 
 def test_llm_node_executes_with_explicit_node_model(monkeypatch) -> None:
     monkeypatch.setattr(
-        workflow_module,
-        "_resolve_model",
+        executor_module,
+        "resolve_model",
         lambda provider, model: {
             "provider": provider,
             "model": model,
@@ -439,20 +451,25 @@ def test_llm_node_executes_with_explicit_node_model(monkeypatch) -> None:
         },
     )
 
-    class FakeCompletion:
+    class FakeResponse:
         content = "fake llm answer"
 
-    class FakeLLMService:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
+    class FakeChatModel:
+        async def ainvoke(self, messages):
+            # System message carries the model identity prompt; user message
+            # is the rendered node prompt.
+            assert "abab6.5" in messages[0].content
+            assert "minimax" in messages[0].content
+            assert messages[1].content == "Say hi to Ada"
+            return FakeResponse()
 
-        async def chat(self, messages, config):
-            assert self.kwargs["provider"] == "minimax"
-            assert self.kwargs["model"] == "abab6.5"
-            assert messages[0].content == "Say hi to Ada"
-            return FakeCompletion()
+    captured = {}
 
-    monkeypatch.setattr(workflow_module, "LLMService", FakeLLMService)
+    def fake_build_chat_model(resolved, **kwargs):
+        captured["resolved"] = resolved
+        return FakeChatModel()
+
+    monkeypatch.setattr(executor_module, "build_chat_model", fake_build_chat_model)
     node = {
         "id": "llm",
         "type": "llm",
@@ -470,14 +487,16 @@ def test_llm_node_executes_with_explicit_node_model(monkeypatch) -> None:
             node, context, workflow_module.WorkflowRun(inputs={})
         )
     )
+    assert captured["resolved"]["provider"] == "minimax"
+    assert captured["resolved"]["model"] == "abab6.5"
     assert trace["output"] == "fake llm answer"
     assert context["llm_output"] == "fake llm answer"
 
 
 def test_knowledge_node_executes_with_explicit_node_model(monkeypatch) -> None:
     monkeypatch.setattr(
-        workflow_module,
-        "_resolve_model",
+        executor_module,
+        "resolve_model",
         lambda provider, model: {
             "provider": provider,
             "model": model,
@@ -500,7 +519,7 @@ def test_knowledge_node_executes_with_explicit_node_model(monkeypatch) -> None:
             assert top_k == 3
             return FakeRagResponse()
 
-    monkeypatch.setattr(workflow_module, "RAGService", FakeRAGService)
+    monkeypatch.setattr(executor_module, "RAGService", FakeRAGService)
     node = {
         "id": "knowledge",
         "type": "knowledge",
@@ -726,7 +745,7 @@ def test_iteration_node_handles_empty_array() -> None:
     assert context["items"] == []
 
 
-def test_workflow_node_executes_nested_workflow() -> None:
+async def test_workflow_node_executes_nested_workflow() -> None:
     nested_id = "nested-workflow-test"
     workflow_module._workflows[nested_id] = {
         "id": nested_id,
@@ -757,25 +776,23 @@ def test_workflow_node_executes_nested_workflow() -> None:
         },
     }
     context = {"input": "Ada"}
-    trace = asyncio.run(
-        workflow_module._execute_node(
-            {
-                "id": "workflow",
-                "type": "workflow",
-                "data": {"workflow_id": nested_id, "output_key": "nested_output"},
-            },
-            context,
-            workflow_module.WorkflowRun(inputs={}),
-        )
+    trace = await workflow_module._execute_node(
+        {
+            "id": "workflow",
+            "type": "workflow",
+            "data": {"workflow_id": nested_id, "output_key": "nested_output"},
+        },
+        context,
+        workflow_module.WorkflowRun(inputs={}),
     )
     assert trace["output"] == "nested=Ada"
     assert context["nested_output"] == "nested=Ada"
 
 
-def test_execute_workflow_graph_retries_failed_node(monkeypatch) -> None:
+async def test_workflow_retries_failed_node_via_retry_policy(monkeypatch) -> None:
     attempts = {"count": 0}
 
-    async def fake_execute_node(node, context, payload):
+    async def fake_execute_node(node, context):
         if node["id"] == "template":
             attempts["count"] += 1
             if attempts["count"] < 2:
@@ -791,7 +808,7 @@ def test_execute_workflow_graph_retries_failed_node(monkeypatch) -> None:
             "finished_at": "now",
         }
 
-    monkeypatch.setattr(workflow_module, "_execute_node", fake_execute_node)
+    monkeypatch.setattr(executor_module, "execute_node", fake_execute_node)
     dsl = {
         "nodes": [
             {
@@ -817,13 +834,7 @@ def test_execute_workflow_graph_retries_failed_node(monkeypatch) -> None:
         ],
         "globals": {},
     }
-    result = asyncio.run(
-        workflow_module._execute_workflow_graph(
-            dsl,
-            {"input": "ok"},
-            workflow_module.WorkflowRun(inputs={"input": "ok"}),
-        )
-    )
+    result = await workflow_runner.execute(dsl, {"input": "ok"}, str(uuid4()))
     assert attempts["count"] == 2
     assert result["status"] == "succeeded"
 
@@ -1178,7 +1189,7 @@ def test_http_node_post_body_and_headers(monkeypatch) -> None:
     assert trace["output"] == '{"ok":true}'
 
 
-def test_merge_node_waits_for_parallel_sources() -> None:
+async def test_merge_node_waits_for_parallel_sources() -> None:
     dsl = {
         "globals": {},
         "nodes": [
@@ -1224,17 +1235,11 @@ def test_merge_node_waits_for_parallel_sources() -> None:
             {"id": "merge-end", "source": "merge", "target": "end"},
         ],
     }
-    result = asyncio.run(
-        workflow_module._execute_workflow_graph(
-            workflow_module._validate_dsl(dsl),
-            {"input": "x"},
-            workflow_module.WorkflowRun(inputs={"input": "x"}),
-        )
-    )
+    result = await workflow_runner.execute(dsl, {"input": "x"}, str(uuid4()))
     assert result["final_output"] == "{'left_out': 'L', 'right_out': 'R'}"
 
 
-def test_iteration_nested_workflow_failure_bubbles() -> None:
+async def test_iteration_nested_workflow_failure_bubbles() -> None:
     workflow_module._workflows["bad-nested"] = {
         "id": "bad-nested",
         "app_id": "qa-app",
@@ -1263,44 +1268,40 @@ def test_iteration_nested_workflow_failure_bubbles() -> None:
             ],
         },
     }
-    result = asyncio.run(
-        workflow_module._execute_workflow_graph(
-            workflow_module._validate_dsl(
+    result = await workflow_runner.execute(
+        {
+            "globals": {},
+            "nodes": [
                 {
-                    "globals": {},
-                    "nodes": [
-                        {
-                            "id": "start",
-                            "type": "start",
-                            "data": {
-                                "output_key": "input",
-                                "variables": [{"key": "input", "required": True}],
-                            },
-                        },
-                        {
-                            "id": "iteration",
-                            "type": "iteration",
-                            "data": {
-                                "items": '["a"]',
-                                "workflow_id": "bad-nested",
-                                "output_key": "items",
-                            },
-                        },
-                        {"id": "end", "type": "end", "data": {"answer": "{{items}}"}},
-                    ],
-                    "edges": [
-                        {
-                            "id": "start-iteration",
-                            "source": "start",
-                            "target": "iteration",
-                        },
-                        {"id": "iteration-end", "source": "iteration", "target": "end"},
-                    ],
-                }
-            ),
-            {"input": "x"},
-            workflow_module.WorkflowRun(inputs={"input": "x"}),
-        )
+                    "id": "start",
+                    "type": "start",
+                    "data": {
+                        "output_key": "input",
+                        "variables": [{"key": "input", "required": True}],
+                    },
+                },
+                {
+                    "id": "iteration",
+                    "type": "iteration",
+                    "data": {
+                        "items": '["a"]',
+                        "workflow_id": "bad-nested",
+                        "output_key": "items",
+                    },
+                },
+                {"id": "end", "type": "end", "data": {"answer": "{{items}}"}},
+            ],
+            "edges": [
+                {
+                    "id": "start-iteration",
+                    "source": "start",
+                    "target": "iteration",
+                },
+                {"id": "iteration-end", "source": "iteration", "target": "end"},
+            ],
+        },
+        {"input": "x"},
+        str(uuid4()),
     )
     assert result["status"] == "failed"
 
@@ -1368,7 +1369,7 @@ def test_multiple_approval_resume_flow() -> None:
     assert second_resume.json()["result"] == "True/True"
 
 
-def test_workflow_on_error_continue_skips_failed_node() -> None:
+async def test_workflow_on_error_continue_skips_failed_node() -> None:
     dsl = {
         "globals": {},
         "settings": {"timeout": 60, "parallelism": 4, "on_error": "continue"},
@@ -1397,18 +1398,12 @@ def test_workflow_on_error_continue_skips_failed_node() -> None:
             {"id": "broken-end", "source": "broken", "target": "end"},
         ],
     }
-    result = asyncio.run(
-        workflow_module._execute_workflow_graph(
-            workflow_module._validate_dsl(dsl),
-            {"input": "x"},
-            workflow_module.WorkflowRun(inputs={"input": "x"}),
-        )
-    )
+    result = await workflow_runner.execute(dsl, {"input": "x"}, str(uuid4()))
     assert result["status"] == "failed"
     assert any(trace["status"] == "failed" for trace in result["traces"])
 
 
-def test_workflow_globals_injection() -> None:
+async def test_workflow_globals_injection() -> None:
     dsl = {
         "globals": {"greeting": "hello"},
         "nodes": [
@@ -1428,13 +1423,7 @@ def test_workflow_globals_injection() -> None:
         ],
         "edges": [{"id": "start-end", "source": "start", "target": "end"}],
     }
-    result = asyncio.run(
-        workflow_module._execute_workflow_graph(
-            workflow_module._validate_dsl(dsl),
-            {"input": "world"},
-            workflow_module.WorkflowRun(inputs={"input": "world"}),
-        )
-    )
+    result = await workflow_runner.execute(dsl, {"input": "world"}, str(uuid4()))
     assert result["final_output"] == "hello world"
 
 

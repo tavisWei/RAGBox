@@ -1,10 +1,12 @@
 """Knowledge base routes with real storage integration."""
 
+import asyncio
 import os
 import uuid
 
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, File, UploadFile
 from pydantic import BaseModel
@@ -13,7 +15,7 @@ from typing import List, Optional
 from api.services.document_processor import DocumentProcessor, DocumentChunk
 from api.services.knowledge_base_store import knowledge_base_store
 from api.services.model_provider_service import model_provider_service
-from api.services.rag_service import RAGService
+from api.services.rag_service import RAGService, parse_pgvector_dsn
 from api.services.resource_config_service import ResourceLevel
 from api.core.rag.splitter.splitter_factory import SplitterFactory
 from .deps import get_current_user
@@ -136,20 +138,176 @@ def _kb_resource_level(kb_id: str) -> ResourceLevel:
     return ResourceLevel.MEDIUM
 
 
+def resolve_datastore_config(kb: dict) -> dict:
+    """Single source of truth for a KB's data-store selection.
+
+    Precedence: KB-level datastore config > DATA_STORE_TYPE env > enabled
+    datastore component (components page, non-SQLite preferred) > the RAG
+    plan's recommended_backend > sqlite.
+    """
+    datastore = kb.get("datastore") or {}
+    store_type = datastore.get("type")
+    if store_type:
+        config: dict = {"data_store_type": store_type}
+        if store_type == "pgvector":
+            if datastore.get("dsn"):
+                config["datastore"] = parse_pgvector_dsn(datastore["dsn"])
+            else:
+                # Individual fields only; anything unset falls through to
+                # PGVECTOR_* env defaults inside RAGService.
+                fields = {
+                    key: datastore[key]
+                    for key in ("host", "port", "user", "password", "database")
+                    if datastore.get(key) not in (None, "")
+                }
+                if "port" in fields:
+                    fields["port"] = int(fields["port"])
+                if fields:
+                    config["datastore"] = fields
+        return config
+
+    env_type = os.getenv("DATA_STORE_TYPE")
+    if env_type:
+        return {"data_store_type": env_type}
+
+    from api.services.component_config_service import component_config_service
+
+    active = component_config_service.get_active_datastore()
+    if active:
+        return active
+
+    if not kb:
+        # No knowledge base context (e.g. plain chat): never default to an
+        # external backend the deployment may not have.
+        return {"data_store_type": "sqlite"}
+
+    plan = _get_rag_plan(kb.get("rag_plan"))
+    runtime_store = plan.get("recommended_backend") or "sqlite"
+    return {"data_store_type": runtime_store}
+
+
+def _mask_dsn(dsn: str) -> str:
+    """Mask the password inside a DSN for API output."""
+    try:
+        parsed = urlparse(dsn)
+        if parsed.password is None:
+            return dsn
+        credentials = parsed.username or ""
+        masked_netloc = f"{credentials}:****@{parsed.hostname or ''}"
+        if parsed.port:
+            masked_netloc += f":{parsed.port}"
+        return urlunparse(
+            (parsed.scheme, masked_netloc, parsed.path, "", "", "")
+        )
+    except Exception:
+        return "****"
+
+
+def _masked_datastore(kb: dict) -> Optional[dict]:
+    datastore = kb.get("datastore")
+    if not datastore:
+        return None
+    masked = dict(datastore)
+    if masked.get("dsn"):
+        masked["dsn"] = _mask_dsn(masked["dsn"])
+    if masked.get("password"):
+        masked["password"] = "****"
+    return masked
+
+
 def _kb_datastore_config(kb_id: str) -> dict:
     kb = _knowledge_bases.get(kb_id, {})
     plan = _get_rag_plan(kb.get("rag_plan"))
-    runtime_store = (
-        os.getenv("DATA_STORE_TYPE") or plan.get("recommended_backend") or "sqlite"
+    config = resolve_datastore_config(kb)
+    config.update(
+        {
+            "vector_enabled": plan.get("hardware_tier") != "low"
+            or plan.get("vector_backend") == "sqlite-builtin",
+            "embedding_provider": kb.get("embedding_provider")
+            or plan.get("embedding_provider"),
+            "embedding_model": kb.get("embedding_model") or plan.get("embedding_model"),
+        }
     )
-    return {
-        "data_store_type": runtime_store,
-        "vector_enabled": plan.get("hardware_tier") != "low"
-        or plan.get("vector_backend") == "sqlite-builtin",
-        "embedding_provider": kb.get("embedding_provider")
-        or plan.get("embedding_provider"),
-        "embedding_model": kb.get("embedding_model") or plan.get("embedding_model"),
-    }
+    return config
+
+
+def _qa_llm_function():
+    """Sync (prompt -> str) bridge for QA-pair generation at ingestion time.
+
+    Opt-in via QA_GENERATION_PROVIDER / QA_GENERATION_MODEL env vars; returns
+    None when unconfigured, in which case QA indexing stays regex-only.
+    """
+    provider = os.getenv("QA_GENERATION_PROVIDER")
+    model = os.getenv("QA_GENERATION_MODEL")
+    if not provider or not model:
+        return None
+    from api.services.llm_service import ChatConfig, ChatMessage, LLMService
+    from api.services.model_provider_service import model_provider_service
+
+    active = model_provider_service.get_active_provider_config(provider)
+    credentials = (active or {}).get("credentials", {})
+    service = LLMService(
+        provider=provider,
+        model=model,
+        api_key=credentials.get("api_key"),
+        base_url=credentials.get("base_url"),
+    )
+
+    def llm_fn(prompt: str) -> str:
+        # Runs inside an asyncio.to_thread worker: no running loop there.
+        response = asyncio.run(
+            service.chat(
+                messages=[ChatMessage(role="user", content=prompt)],
+                config=ChatConfig(max_tokens=2048, temperature=0.3),
+            )
+        )
+        return response.content
+
+    return llm_fn
+
+
+def _chunks_via_index_processor(
+    index_mode: str,
+    text: str,
+    metadata: dict,
+    splitter_config: dict,
+) -> List[DocumentChunk]:
+    """Transform text into chunks with a non-paragraph index processor."""
+    from api.core.rag.index_processor.processor.parent_child_index_processor import (
+        ParentChildIndexProcessor,
+        flatten_parent_child,
+    )
+    from api.core.rag.index_processor.processor.qa_index_processor import (
+        QAIndexProcessor,
+    )
+    from api.core.rag.models.document import Document as ModelDocument
+
+    base = ModelDocument(page_content=text, metadata=metadata or {})
+    if index_mode == "parent_child":
+        processor = ParentChildIndexProcessor(
+            parent_chunk_size=int(splitter_config.get("parent_chunk_size", 2048)),
+            child_chunk_size=int(splitter_config.get("chunk_size", 256)),
+            chunk_overlap=int(splitter_config.get("chunk_overlap", 64)),
+        )
+        transformed = flatten_parent_child(processor.transform([base]))
+    elif index_mode == "qa":
+        processor = QAIndexProcessor(
+            llm_generate=bool(splitter_config.get("qa_llm_generate")),
+            llm_function=_qa_llm_function(),
+        )
+        transformed = processor.transform([base])
+    else:
+        raise HTTPException(400, f"Unsupported index_mode: {index_mode}")
+    return [
+        DocumentChunk(
+            content=doc.page_content,
+            chunk_index=i,
+            start_char=0,
+            end_char=len(doc.page_content),
+            metadata=doc.metadata or {},
+        )
+        for i, doc in enumerate(transformed)
+    ]
 
 
 def _map_split_chunks_to_metadata(
@@ -256,6 +414,7 @@ class KnowledgeBaseOut(BaseModel):
     reindex_required: bool = False
     splitter_config: Optional[dict] = None
     retrieval_config: Optional[dict] = None
+    datastore: Optional[dict] = None  # password in dsn is masked
 
 
 class KnowledgeBaseDetailOut(KnowledgeBaseOut):
@@ -270,6 +429,7 @@ class KnowledgeBaseUpdate(BaseModel):
     reindex_required: Optional[bool] = None
     splitter_config: Optional[dict] = None
     retrieval_config: Optional[dict] = None
+    datastore: Optional[dict] = None  # {"type": "pgvector", "dsn": "..."}
 
 
 class KnowledgeBaseDocumentCreate(BaseModel):
@@ -303,6 +463,7 @@ async def list_knowledge_bases(user: dict = Depends(get_current_user)):
             reindex_required=kb.get("reindex_required", False),
             splitter_config=kb.get("splitter_config"),
             retrieval_config=kb.get("retrieval_config"),
+            datastore=_masked_datastore(kb),
         )
         for kb_id, kb in _knowledge_bases.items()
     ]
@@ -341,6 +502,7 @@ async def create_knowledge_base(
         reindex_required=_knowledge_bases[kb_id].get("reindex_required", False),
         splitter_config=_knowledge_bases[kb_id]["splitter_config"],
         retrieval_config=_knowledge_bases[kb_id]["retrieval_config"],
+        datastore=_masked_datastore(_knowledge_bases[kb_id]),
     )
 
 
@@ -371,6 +533,7 @@ async def get_knowledge_base(kb_id: str, user: dict = Depends(get_current_user))
         reindex_required=kb.get("reindex_required", False),
         splitter_config=kb.get("splitter_config"),
         retrieval_config=kb.get("retrieval_config"),
+        datastore=_masked_datastore(kb),
         documents=_knowledge_base_documents.get(kb_id, []),
     )
 
@@ -401,6 +564,33 @@ async def update_knowledge_base(
         kb["splitter_config"] = payload.splitter_config
     if payload.retrieval_config is not None:
         kb["retrieval_config"] = payload.retrieval_config
+    if payload.datastore is not None:
+        store_type = payload.datastore.get("type")
+        if not store_type:
+            # Empty type means "follow plan/env": remove the KB-level override.
+            kb.pop("datastore", None)
+        else:
+            if store_type not in {"sqlite", "pgvector", "elasticsearch"}:
+                raise HTTPException(400, f"Unsupported datastore type: {store_type}")
+            datastore = dict(payload.datastore)
+            if store_type == "pgvector":
+                if datastore.get("dsn"):
+                    parse_pgvector_dsn(datastore["dsn"])  # validation
+                if datastore.get("port") not in (None, ""):
+                    try:
+                        int(datastore["port"])
+                    except (TypeError, ValueError):
+                        raise HTTPException(400, "datastore port must be a number")
+                stored = kb.get("datastore") or {}
+                # The UI only ever sees masked secrets; keep stored values
+                # when the payload omits them or sends the mask back.
+                for secret_key in ("dsn", "password"):
+                    incoming = datastore.get(secret_key)
+                    if (not incoming or "****" in str(incoming)) and stored.get(
+                        secret_key
+                    ):
+                        datastore[secret_key] = stored[secret_key]
+            kb["datastore"] = datastore
     if payload.reindex_required is not None:
         kb["reindex_required"] = payload.reindex_required
     _persist_kb_state()
@@ -420,7 +610,53 @@ async def update_knowledge_base(
         reindex_required=kb.get("reindex_required", False),
         splitter_config=kb.get("splitter_config"),
         retrieval_config=kb.get("retrieval_config"),
+        datastore=_masked_datastore(kb),
     )
+
+
+class DatastoreTestRequest(BaseModel):
+    type: str
+    dsn: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    user: Optional[str] = None
+    password: Optional[str] = None
+    database: Optional[str] = None
+
+
+@router.post("/knowledge-bases/test-datastore")
+async def test_datastore_connection(
+    payload: DatastoreTestRequest, user: dict = Depends(get_current_user)
+):
+    """Test connectivity for a candidate datastore configuration."""
+    from api.core.rag.datasource.unified.data_store_factory import DataStoreFactory
+
+    config: dict = {}
+    if payload.type == "pgvector":
+        if payload.dsn:
+            config = parse_pgvector_dsn(payload.dsn)
+        else:
+            config = {
+                key: value
+                for key, value in {
+                    "host": payload.host,
+                    "port": payload.port,
+                    "user": payload.user,
+                    "password": payload.password,
+                    "database": payload.database,
+                }.items()
+                if value not in (None, "")
+            }
+    try:
+        store = DataStoreFactory.create(store_type=payload.type, config=config)
+        ok = await asyncio.to_thread(store.health_check)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, f"Datastore connection failed: {exc}") from exc
+    if not ok:
+        raise HTTPException(400, "Datastore health check failed")
+    return {"status": "ok", "type": payload.type}
 
 
 @router.delete("/knowledge-bases/{kb_id}")
@@ -449,25 +685,35 @@ async def add_document(
 
     try:
         splitter_config = _knowledge_bases[kb_id].get("splitter_config") or {}
-        splitter = SplitterFactory.create_from_dict(
-            {
-                "type": splitter_config.get("type", "recursive"),
-                "chunk_size": splitter_config.get("chunk_size", 500),
-                "chunk_overlap": splitter_config.get("chunk_overlap", 100),
-            }
-        )
-        split_chunks = splitter.split_text(payload.content)
-        joined_text = payload.content
-        source_chunk = DocumentChunk(
-            content=payload.content,
-            chunk_index=0,
-            start_char=0,
-            end_char=len(payload.content),
-            metadata=payload.metadata or {},
-        )
-        processed_chunks = _map_split_chunks_to_metadata(
-            split_chunks, [source_chunk], joined_text
-        )
+        index_mode = splitter_config.get("index_mode") or "paragraph"
+        if index_mode == "paragraph":
+            splitter = SplitterFactory.create_from_dict(
+                {
+                    "type": splitter_config.get("type", "recursive"),
+                    "chunk_size": splitter_config.get("chunk_size", 500),
+                    "chunk_overlap": splitter_config.get("chunk_overlap", 100),
+                }
+            )
+            split_chunks = splitter.split_text(payload.content)
+            joined_text = payload.content
+            source_chunk = DocumentChunk(
+                content=payload.content,
+                chunk_index=0,
+                start_char=0,
+                end_char=len(payload.content),
+                metadata=payload.metadata or {},
+            )
+            processed_chunks = _map_split_chunks_to_metadata(
+                split_chunks, [source_chunk], joined_text
+            )
+        else:
+            processed_chunks = await asyncio.to_thread(
+                _chunks_via_index_processor,
+                index_mode,
+                payload.content,
+                payload.metadata or {},
+                splitter_config,
+            )
 
         rag_level = _kb_resource_level(kb_id)
         rag_service = RAGService(
@@ -525,19 +771,29 @@ async def upload_document(
     try:
         doc_processor = DocumentProcessor()
         processed = await doc_processor.process_file(tmp_path)
-        splitter_config = _knowledge_bases[kb_id].get("splitter_config") or {}
-        splitter = SplitterFactory.create_from_dict(
-            {
-                "type": splitter_config.get("type", "recursive"),
-                "chunk_size": splitter_config.get("chunk_size", 500),
-                "chunk_overlap": splitter_config.get("chunk_overlap", 100),
-            }
-        )
         joined_text = "\n\n".join(chunk.content for chunk in processed.chunks)
-        split_chunks = splitter.split_text(joined_text)
-        processed_chunks = _map_split_chunks_to_metadata(
-            split_chunks, processed.chunks, joined_text
-        )
+        splitter_config = _knowledge_bases[kb_id].get("splitter_config") or {}
+        index_mode = splitter_config.get("index_mode") or "paragraph"
+        if index_mode == "paragraph":
+            splitter = SplitterFactory.create_from_dict(
+                {
+                    "type": splitter_config.get("type", "recursive"),
+                    "chunk_size": splitter_config.get("chunk_size", 500),
+                    "chunk_overlap": splitter_config.get("chunk_overlap", 100),
+                }
+            )
+            split_chunks = splitter.split_text(joined_text)
+            processed_chunks = _map_split_chunks_to_metadata(
+                split_chunks, processed.chunks, joined_text
+            )
+        else:
+            processed_chunks = await asyncio.to_thread(
+                _chunks_via_index_processor,
+                index_mode,
+                joined_text,
+                {"name": file.filename},
+                splitter_config,
+            )
         rag_service = RAGService(
             resource_level=_kb_resource_level(kb_id),
             config=_kb_datastore_config(kb_id),

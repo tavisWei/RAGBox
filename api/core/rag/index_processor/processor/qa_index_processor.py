@@ -20,6 +20,8 @@ class QAIndexProcessor(BaseIndexProcessor):
             ),
         )
         self.llm_generate = kwargs.get("llm_generate", False)
+        # Sync callable (prompt: str) -> str used when llm_generate is on.
+        self.llm_function = kwargs.get("llm_function")
 
     def extract(self, extract_setting: ExtractSetting, **kwargs) -> List[Document]:
         content = kwargs.get("content", "")
@@ -79,17 +81,52 @@ class QAIndexProcessor(BaseIndexProcessor):
         return [(q.strip(), a.strip()) for q, a in matches]
 
     def _generate_qa_pairs(self, text: str) -> List[Tuple[str, str]]:
-        return [("What is this document about?", text[:500])]
+        """Generate Q/A pairs with an LLM and parse them with the QA pattern.
+
+        Returns an empty list when no llm_function is configured; the caller
+        then falls back to plain chunk splitting.
+        """
+        if not self.llm_function:
+            return []
+        prompt = (
+            "请根据以下文档内容生成问答对，用于构建问答检索索引。\n"
+            "要求：覆盖文档的关键信息，问题简洁明确，答案忠实于原文。\n"
+            "每对格式严格为两行：\nQ: <问题>\nA: <答案>\n\n"
+            f"文档内容：\n{text[:4000]}"
+        )
+        try:
+            response = self.llm_function(prompt)
+        except Exception:
+            return []
+        return self._extract_qa_pairs(response or "")
 
     def load(self, dataset_id: str, documents: List[Document], **kwargs) -> None:
-        pass
+        data_store = kwargs.get("data_store")
+        if data_store is None:
+            raise ValueError("load requires a data_store")
+        self._load_to_store(
+            dataset_id, documents, data_store, kwargs.get("embeddings")
+        )
 
     def clean(
         self, dataset_id: str, node_ids: Optional[List[str]] = None, **kwargs
     ) -> None:
-        pass
+        data_store = kwargs.get("data_store")
+        if data_store is None:
+            raise ValueError("clean requires a data_store")
+        self._clean_from_store(dataset_id, data_store, node_ids)
 
     def retrieve(
         self, query: str, dataset_id: str, top_k: int, **kwargs
     ) -> List[Document]:
-        return []
+        data_store = kwargs.get("data_store")
+        if data_store is None:
+            raise ValueError("retrieve requires a data_store")
+        return self._retrieve_from_store(
+            query,
+            dataset_id,
+            top_k,
+            data_store,
+            query_vector=kwargs.get("query_vector"),
+            search_method=kwargs.get("search_method", "hybrid"),
+        )

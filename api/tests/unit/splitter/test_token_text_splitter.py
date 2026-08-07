@@ -133,24 +133,21 @@ class TestTokenTextSplitter:
         assert len(chunks) == 11
 
     def test_import_error_sets_none_encoding(self):
-        mock_tiktoken = MagicMock()
-        mock_tiktoken.encoding_for_model.side_effect = ImportError(
-            "No module named tiktoken"
-        )
+        import sys
 
-        import api.core.rag.splitter.token_text_splitter as tts
-
-        original_tiktoken = getattr(tts, "tiktoken", None)
+        # 让 __init__ 里的局部 import tiktoken 抛 ImportError（sys.modules
+        # 置 None 是标准做法；直接改模块属性对局部 import 无效）。
+        original_tiktoken = sys.modules.get("tiktoken")
         try:
-            tts.tiktoken = mock_tiktoken
+            sys.modules["tiktoken"] = None
             splitter = TokenTextSplitter()
             assert splitter._encoding is None
             assert splitter._tiktoken is None
         finally:
             if original_tiktoken is not None:
-                tts.tiktoken = original_tiktoken
-            elif hasattr(tts, "tiktoken"):
-                delattr(tts, "tiktoken")
+                sys.modules["tiktoken"] = original_tiktoken
+            else:
+                sys.modules.pop("tiktoken", None)
 
     def test_fallback_split_method(self):
         splitter = TokenTextSplitter.__new__(TokenTextSplitter)

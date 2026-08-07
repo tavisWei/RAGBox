@@ -45,6 +45,10 @@ Return only the numbers in order of relevance (most relevant first), separated b
         try:
             response = self.llm_function(prompt)
             ranked_indices = self._parse_ranking(response, len(results))
+            if not ranked_indices:
+                # LLM gave nothing parseable: keep the original order rather
+                # than dropping the whole batch.
+                return results
 
             reranked = []
             for rank, idx in enumerate(ranked_indices):

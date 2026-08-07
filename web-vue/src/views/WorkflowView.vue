@@ -58,6 +58,7 @@ const traceStatusMap = computed(() => {
   return Object.fromEntries(traces.map(trace => [String(trace.node_id), String(trace.status || 'succeeded')]))
 })
 const workflowRuns = ref<Array<Record<string, unknown>>>([])
+const availableTools = ref<Array<{ name: string; description?: string }>>([])
 const workflowVersions = ref<Array<Record<string, unknown>>>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
@@ -213,6 +214,13 @@ const fetchData = async () => {
     apps.value = appRes.data
     providers.value = providerRes.data.data
     knowledgeBases.value = kbRes.data
+    try {
+      const toolsRes = await workflowApi.tools()
+      availableTools.value = toolsRes.data
+    }
+    catch {
+      availableTools.value = []
+    }
     await fetchWorkflows()
   }
   finally {
@@ -921,10 +929,13 @@ onNodeDragStop(({ node }) => {
             </template>
             <template v-if="selectedNode.type === 'tool'">
               <el-form-item label="工具类型">
-                <el-input v-model="selectedNode.data.tool" placeholder="template" />
+                <el-select v-model="selectedNode.data.tool" placeholder="template">
+                  <el-option label="template（模板渲染）" value="template" />
+                  <el-option v-for="tool in availableTools" :key="tool.name" :label="`${tool.name}（${tool.description || ''}）`" :value="tool.name" />
+                </el-select>
               </el-form-item>
-              <el-form-item label="工具模板">
-                <el-input v-model="selectedNode.data.template" type="textarea" :rows="4" />
+              <el-form-item label="工具输入（模板）">
+                <el-input v-model="selectedNode.data.template" type="textarea" :rows="4" :placeholder="selectedNode.data.tool === 'template' ? '渲染结果即输出' : '渲染后作为工具入参'" />
               </el-form-item>
             </template>
             <template v-if="selectedNode.type === 'approval'">

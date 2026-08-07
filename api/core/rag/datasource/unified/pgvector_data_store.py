@@ -211,6 +211,53 @@ class PGVectorDataStore(BaseDataStore):
 
         return self._deduplicate_and_sort(results, top_k)
 
+    def list_documents(self, collection_name: str) -> List[Dict[str, Any]]:
+        """Return all documents of a collection as {doc_id, content, metadata}."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT id, content, metadata FROM {collection_name}_docs"
+                )
+                return [
+                    {
+                        "doc_id": row[0],
+                        "content": row[1],
+                        "metadata": row[2] or {},
+                    }
+                    for row in cur.fetchall()
+                ]
+        finally:
+            self._release_connection(conn)
+
+    def get_documents_by_ids(
+        self, collection_name: str, doc_ids: List[str]
+    ) -> List[SearchResult]:
+        if not doc_ids:
+            return []
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT id, content, metadata FROM {collection_name}_docs "
+                    "WHERE id = ANY(%s)",
+                    (doc_ids,),
+                )
+                by_id = {row[0]: row for row in cur.fetchall()}
+        finally:
+            self._release_connection(conn)
+        return [
+            SearchResult(
+                content=by_id[doc_id][1],
+                score=0.0,
+                doc_id=doc_id,
+                metadata=by_id[doc_id][2] or {},
+                retrieval_method="keyword",
+            )
+            for doc_id in doc_ids
+            if doc_id in by_id
+        ]
+
     def _fulltext_search(
         self,
         collection_name: str,
@@ -219,7 +266,12 @@ class PGVectorDataStore(BaseDataStore):
         score_threshold: float,
         filters: Optional[Dict[str, Any]],
     ) -> List[SearchResult]:
-        """Perform fulltext search using PostgreSQL tsvector."""
+        """Perform fulltext search using PostgreSQL tsvector.
+
+        Falls back to a pg_trgm/ILIKE substring match when tsvector finds
+        nothing — the 'simple' text search config does not segment CJK text,
+        so Chinese queries would otherwise never match.
+        """
         results: List[SearchResult] = []
         conn = self._get_connection()
         try:
@@ -263,6 +315,36 @@ class PGVectorDataStore(BaseDataStore):
                                 retrieval_method="fulltext",
                             )
                         )
+
+                if not results and query.strip():
+                    # CJK fallback: substring match with trigram similarity.
+                    cur.execute(
+                        f"""
+                        SELECT
+                            id,
+                            content,
+                            metadata,
+                            similarity(content, %s) as score
+                        FROM {collection_name}_docs
+                        WHERE content ILIKE %s
+                        {filter_clause}
+                        ORDER BY score DESC
+                        LIMIT %s
+                        """,
+                        (query, f"%{query}%") + tuple(filter_params) + (top_k,),
+                    )
+                    for row in cur:
+                        score = float(row[3]) if row[3] is not None else 0.5
+                        if score >= score_threshold:
+                            results.append(
+                                SearchResult(
+                                    content=row[1],
+                                    score=score,
+                                    doc_id=row[0],
+                                    metadata=row[2] or {},
+                                    retrieval_method="fulltext",
+                                )
+                            )
         except Exception as exc:
             if "does not exist" in str(exc):
                 raise CollectionNotFoundError(

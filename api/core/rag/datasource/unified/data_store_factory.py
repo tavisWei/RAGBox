@@ -30,6 +30,28 @@ class DataStoreFactory:
             except ImportError:
                 pass
 
+        # Qdrant uses the plain REST API via httpx — always available.
+        if "qdrant" not in cls._registry:
+            try:
+                from .qdrant_data_store import QdrantDataStore
+                cls._registry["qdrant"] = QdrantDataStore
+            except ImportError:
+                pass
+
+        if "milvus" not in cls._registry:
+            try:
+                from .milvus_data_store import MilvusDataStore
+                cls._registry["milvus"] = MilvusDataStore
+            except ImportError:
+                pass
+
+        if "mysql" not in cls._registry:
+            try:
+                from .mysql_data_store import MySQLDataStore
+                cls._registry["mysql"] = MySQLDataStore
+            except ImportError:
+                pass
+
     @classmethod
     def register(cls, name: str, store_class: Type[BaseDataStore]) -> None:
         cls._registry[name] = store_class

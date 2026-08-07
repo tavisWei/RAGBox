@@ -1,5 +1,6 @@
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from api.core.rag.cleaner.clean_processor import CleanProcessor
 from api.core.rag.extractor.entity.extract_setting import ExtractSetting
@@ -12,6 +13,60 @@ from api.core.rag.splitter.splitter_types import SplitterConfig, SplitterType
 class ParentChildMode(str, Enum):
     PARAGRAPH = "paragraph"
     FULL_DOC = "full-doc"
+
+
+def flatten_parent_child(documents: List[Document]) -> List[Document]:
+    """Flatten parent documents into storable child documents.
+
+    Each child carries parent_id / parent_content in its metadata so a child
+    hit can be mapped back to the parent passage at retrieval time.
+    """
+    flattened: List[Document] = []
+    for parent in documents:
+        if not parent.children:
+            # Already a flat (child) document — pass through unchanged.
+            flattened.append(parent)
+            continue
+        parent_meta = parent.metadata or {}
+        parent_id = parent_meta.get("doc_id") or str(uuid4())
+        for child in parent.children or []:
+            flattened.append(
+                Document(
+                    page_content=child.page_content,
+                    metadata={
+                        **parent_meta,
+                        **(child.metadata or {}),
+                        "parent_id": parent_id,
+                        "parent_content": parent.page_content,
+                        "index_mode": "parent_child",
+                    },
+                )
+            )
+    return flattened
+
+
+def collapse_parent_child_docs(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Map child-chunk hits back to their parent passage.
+
+    Input is score-ordered retrieval dicts; children sharing a parent_id are
+    deduplicated to the best-scoring child, with content replaced by the
+    parent passage. Docs without parent metadata pass through unchanged.
+    """
+    collapsed: List[Dict[str, Any]] = []
+    seen_parents = set()
+    for doc in docs:
+        metadata = doc.get("metadata") or {}
+        parent_id = metadata.get("parent_id")
+        if not parent_id:
+            collapsed.append(doc)
+            continue
+        if parent_id in seen_parents:
+            continue
+        seen_parents.add(parent_id)
+        collapsed.append(
+            {**doc, "content": metadata.get("parent_content") or doc.get("content")}
+        )
+    return collapsed
 
 
 class ParentChildIndexProcessor(BaseIndexProcessor):
@@ -80,14 +135,46 @@ class ParentChildIndexProcessor(BaseIndexProcessor):
         return result
 
     def load(self, dataset_id: str, documents: List[Document], **kwargs) -> None:
-        pass
+        data_store = kwargs.get("data_store")
+        if data_store is None:
+            raise ValueError("load requires a data_store")
+        # Embeddings are computed over the flattened children by the caller.
+        self._load_to_store(
+            dataset_id,
+            flatten_parent_child(documents),
+            data_store,
+            kwargs.get("embeddings"),
+        )
 
     def clean(
         self, dataset_id: str, node_ids: Optional[List[str]] = None, **kwargs
     ) -> None:
-        pass
+        data_store = kwargs.get("data_store")
+        if data_store is None:
+            raise ValueError("clean requires a data_store")
+        self._clean_from_store(dataset_id, data_store, node_ids)
 
     def retrieve(
         self, query: str, dataset_id: str, top_k: int, **kwargs
     ) -> List[Document]:
-        return []
+        data_store = kwargs.get("data_store")
+        if data_store is None:
+            raise ValueError("retrieve requires a data_store")
+        children = self._retrieve_from_store(
+            query,
+            dataset_id,
+            top_k,
+            data_store,
+            query_vector=kwargs.get("query_vector"),
+            search_method=kwargs.get("search_method", "hybrid"),
+        )
+        collapsed = collapse_parent_child_docs(
+            [
+                {"content": doc.page_content, "metadata": doc.metadata or {}}
+                for doc in children
+            ]
+        )
+        return [
+            Document(page_content=doc["content"], metadata=doc["metadata"])
+            for doc in collapsed
+        ]

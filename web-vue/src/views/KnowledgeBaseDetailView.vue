@@ -38,6 +38,40 @@ const hitTestForm = ref({
   model: '',
 })
 const hitTestResult = ref<any>(null)
+const datastoreForm = ref({ type: '', host: '', port: 5432, user: '', password: '', database: '' })
+const testingDatastore = ref(false)
+
+const datastorePayload = () => {
+  const form = datastoreForm.value
+  const payload: Record<string, any> = { type: form.type }
+  if (form.type === 'pgvector') {
+    if (form.host) payload.host = form.host
+    if (form.port) payload.port = Number(form.port)
+    if (form.user) payload.user = form.user
+    if (form.database) payload.database = form.database
+    // 密码只在前端明文输入时上送；掩码或留空时由后端保留已存值
+    if (form.password && !form.password.includes('****')) payload.password = form.password
+  }
+  return payload
+}
+
+const testDatastore = async () => {
+  if (!datastoreForm.value.type) {
+    ElMessage.warning('请先选择后端类型')
+    return
+  }
+  testingDatastore.value = true
+  try {
+    await knowledgeBaseApi.testDatastore(datastorePayload() as { type: string })
+    ElMessage.success('连接测试通过')
+  }
+  catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '连接测试失败')
+  }
+  finally {
+    testingDatastore.value = false
+  }
+}
 
 const currentModels = computed(() => {
   const current = providers.value.find(item => item.provider === hitTestForm.value.provider)
@@ -136,6 +170,14 @@ const fetchDetail = async () => {
     ragPlan.value = kbRes.data.rag_plan || kbRes.data.hardware_tier || 'medium'
     splitterForm.value = kbRes.data.splitter_config || splitterForm.value
     retrievalForm.value = kbRes.data.retrieval_config || retrievalForm.value
+    datastoreForm.value = {
+      type: kbRes.data.datastore?.type || '',
+      host: kbRes.data.datastore?.host || '',
+      port: kbRes.data.datastore?.port || 5432,
+      user: kbRes.data.datastore?.user || '',
+      password: kbRes.data.datastore?.password || '',
+      database: kbRes.data.datastore?.database || '',
+    }
   }
   finally {
     loading.value = false
@@ -190,6 +232,7 @@ const saveConfig = async () => {
     hardware_tier: hardwareTier.value,
     splitter_config: splitterForm.value,
     retrieval_config: retrievalForm.value,
+    datastore: datastorePayload(),
   })
   ElMessage.success('RAG 方案已保存；如已有文档，索引需重建后完全生效')
   await fetchDetail()
@@ -455,6 +498,55 @@ watch(documentItems, () => {
           <el-form-item label="分块重叠">
             <el-input-number v-model="splitterForm.chunk_overlap" :min="0" :step="10" />
             <div class="field-tip">相邻分块保留的重复内容，能减少切分边界的信息丢失。</div>
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <!-- Datastore Config -->
+      <div class="surface-card section-card">
+        <div class="section-header">
+          <div class="section-title">
+            <el-icon size="18" class="text-accent"><Coin /></el-icon>
+            <span>检索后端</span>
+          </div>
+        </div>
+
+        <el-form label-width="120px">
+          <el-form-item label="后端类型">
+            <el-select v-model="datastoreForm.type" style="width: 100%">
+              <el-option label="跟随方案 / 环境变量（默认）" value="" />
+              <el-option label="SQLite（本地内置）" value="sqlite" />
+              <el-option label="PostgreSQL + pgvector" value="pgvector" />
+              <el-option label="Elasticsearch" value="elasticsearch" />
+            </el-select>
+            <div class="field-tip">知识库级别的存储后端覆盖；不设置时按方案预设或 DATA_STORE_TYPE 环境变量。</div>
+          </el-form-item>
+          <template v-if="datastoreForm.type === 'pgvector'">
+            <el-form-item label="主机 / 端口">
+              <div style="display: flex; gap: 8px; width: 100%">
+                <el-input v-model="datastoreForm.host" placeholder="localhost" style="flex: 1" />
+                <el-input-number v-model="datastoreForm.port" :min="1" :max="65535" style="width: 140px" />
+              </div>
+            </el-form-item>
+            <el-form-item label="数据库名">
+              <el-input v-model="datastoreForm.database" placeholder="aiwriter" />
+            </el-form-item>
+            <el-form-item label="账号">
+              <el-input v-model="datastoreForm.user" placeholder="aiwriter" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input
+                v-model="datastoreForm.password"
+                type="password"
+                show-password
+                placeholder="留空则保留已保存的密码"
+              />
+              <div class="field-tip">保存后密码只以掩码回显；留空表示不修改。各字段留空时回退到 PGVECTOR_* 环境变量。</div>
+            </el-form-item>
+          </template>
+          <el-form-item v-if="datastoreForm.type" label="连通性">
+            <el-button :loading="testingDatastore" @click="testDatastore">测试连接</el-button>
+            <div class="field-tip">用当前填写的配置尝试连接并初始化后端。</div>
           </el-form-item>
         </el-form>
       </div>
