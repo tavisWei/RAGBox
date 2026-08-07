@@ -53,6 +53,8 @@ rag-platform/
 │   │           ├── fusion_strategies.py
 │   │           └── reranker.py
 │   ├── services/
+│   │   ├── business_store/       # 业务数据存储抽象（local JSON / MySQL）
+│   │   └── workflow_store.py     # 工作流定义与运行记录
 │   ├── tests/
 │   └── data/                     # Local runtime data (gitignored)
 ├── web-vue/                      # Vue 3 + Vite frontend

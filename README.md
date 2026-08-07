@@ -83,7 +83,14 @@ RAGBox 的设计思路是让同一套项目能够覆盖不同资源条件下的�
 
 项目对底层数据存储做了统一抽象，目标是让不同后端具备一致的接入方式，降低迁移和切换成本。
 
-当前已实现的检索后端：
+**业务数据存储**（用户、会话、应用、知识库配置、工作流等业务数据）：
+
+- 本地 JSON 文件（默认，零依赖）
+- MySQL（`business_kv` 命名空间表）
+
+支持"先迁移后切换"：迁移逐命名空间复制并校验，成功后才切换，源数据保留可回退；管理入口在组件配置页的"存储管理"卡片。
+
+**检索/向量后端**（已实现）：
 
 - SQLite（内置默认，FTS5 全文 + 向量）
 - PostgreSQL + pgvector（HNSW 向量索引 + tsvector/trgm 全文）
@@ -410,7 +417,8 @@ curl http://localhost:8000/api/v1/health
 
 | 变量名 | 说明 | 默认值 |
 |---|---|---|
-| `DATA_STORE_TYPE` | 存储后端类型 | `sqlite` |
+| `DATA_STORE_TYPE` | 检索后端类型 | `sqlite` |
+| `BUSINESS_STORE_TYPE` | 业务数据存储类型（local / mysql） | `local` |
 | `RESOURCE_LEVEL` | 资源级别 | `medium` |
 | `SQLITE_DB_PATH` | SQLite 数据库路径 | `api/data/rag.sqlite` |
 | `PGVECTOR_DSN` | pgvector 连接串（优先于分项配置） | 空 |
@@ -555,6 +563,7 @@ RAGBox 适合这些场景：
 - [技术架构文档](deliverables/architecture/technical-architecture.md)
 - [工作流引擎 LangGraph 迁移方案](deliverables/architecture/langgraph-migration-plan.md)
 - [RAG 链路实施记录](deliverables/architecture/rag-hardening-plan.md)
+- [业务库与存储切换方案](deliverables/architecture/business-store-plan.md)
 
 ---
 
