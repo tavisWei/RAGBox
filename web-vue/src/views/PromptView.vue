@@ -6,7 +6,7 @@ import { promptApi } from '@/api'
 const template = ref('你好，{{ name }}！欢迎来到{{ place }}。')
 const inputs = ref<Record<string, string>>({
   name: '用户',
-  place: 'RAG Platform',
+  place: 'RAGBox',
 })
 const result = ref('')
 const variables = ref<string[]>([])

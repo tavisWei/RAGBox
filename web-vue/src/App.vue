@@ -50,9 +50,9 @@ const handleCommand = async (command: string) => {
     <el-aside :width="'var(--sidebar-width)'" class="sidebar">
       <div class="logo">
         <div class="logo-mark">
-          <el-icon size="22" color="var(--rp-primary-500)"><Collection /></el-icon>
+          <el-icon size="22" color="var(--rp-primary-500)"><Box /></el-icon>
         </div>
-        <span class="logo-text">RAG Platform</span>
+        <span class="logo-text">RAGBox</span>
       </div>
 
       <div class="sidebar-menu">

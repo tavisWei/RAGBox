@@ -1,6 +1,6 @@
 # Deployment Guide
 
-This guide explains deployment options for the RAG Platform across low, medium, and high resource tiers. The repository itself only ships application code and local development scripts. Production Docker Compose or Kubernetes manifests should be maintained outside this repository.
+This guide explains deployment options for RAGBox across low, medium, and high resource tiers. The repository itself only ships application code and local development scripts. Production Docker Compose or Kubernetes manifests should be maintained outside this repository.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ This guide explains deployment options for the RAG Platform across low, medium, 
 
 ## Overview
 
-The RAG Platform supports three deployment tiers based on your resource constraints and scale requirements:
+RAGBox supports three deployment tiers based on your resource constraints and scale requirements:
 
 | Level | Backend | Documents | Latency | Memory |
 |-------|---------|-----------|---------|--------|

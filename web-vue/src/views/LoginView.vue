@@ -60,9 +60,9 @@ const submit = async () => {
         <div class="brand-content">
           <div class="brand-logo">
             <div class="logo-icon">
-              <el-icon size="32"><Collection /></el-icon>
+              <el-icon size="32"><Box /></el-icon>
             </div>
-            <span class="logo-text">RAG Platform</span>
+            <span class="logo-text">RAGBox</span>
           </div>
           
           <h1 class="brand-headline">

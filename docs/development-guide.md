@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide covers how to set up the development environment, run tests, and contribute to the RAG Platform project.
+This guide covers how to set up the development environment, run tests, and contribute to RAGBox project.
 
 ## Table of Contents
 

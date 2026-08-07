@@ -1,6 +1,6 @@
 # API Documentation
 
-This document describes the public APIs provided by the RAG Platform.
+This document describes the public APIs provided by RAGBox.
 
 ## Table of Contents
 
