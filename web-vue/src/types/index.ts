@@ -13,6 +13,19 @@ export interface KnowledgeBase {
   reindex_required?: boolean
   splitter_config?: Record<string, any>
   retrieval_config?: Record<string, any>
+  rag_mode?: string
+}
+
+export interface AgentIndexEntry {
+  document_id: string
+  name: string
+  title?: string
+  summary?: string
+  keywords?: string[]
+  questions?: string[]
+  status: 'pending' | 'indexing' | 'completed' | 'error'
+  error?: string
+  updated_at?: string
 }
 
 export interface CreateKnowledgeBaseRequest {

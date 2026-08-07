@@ -5,11 +5,20 @@ from uuid import uuid4
 
 from api.services.local_store import LocalStore
 from api.services.llm_service import ChatConfig, ChatMessage, LLMService
+from api.services.knowledge_base_store import knowledge_base_store
 from api.services.model_provider_service import model_provider_service
 from api.services.rag_service import RAGService
 
 
 CHAT_TIMEOUT_SECONDS = 60
+
+
+def _agent_rag():
+    """Lazy import: agent_rag_service pulls in core.agent, which (via
+    api.services __init__) would circularly import this module at startup."""
+    from api.services.agent_rag_service import AGENT_EVENT_PREFIX, AgentRAGService
+
+    return AGENT_EVENT_PREFIX, AgentRAGService
 
 
 class ChatService:
@@ -47,6 +56,42 @@ class ChatService:
                 "messages": self._messages,
             }
         )
+
+    @staticmethod
+    def _partition_kbs(
+        kb_ids: List[str], provider: str
+    ) -> tuple[List[tuple[str, Dict[str, Any]]], List[str]]:
+        """Split selected KBs into agent-mode (kb_id, kb) pairs and normal ids.
+
+        The demo provider cannot run function calling, so agent KBs degrade to
+        the standard retrieval path there.
+        """
+        if provider == "demo":
+            return [], list(kb_ids)
+        kbs = knowledge_base_store.read_all().get("knowledge_bases", {})
+        agent: List[tuple[str, Dict[str, Any]]] = []
+        normal: List[str] = []
+        for kb_id in kb_ids:
+            kb = kbs.get(kb_id)
+            if kb and kb.get("rag_mode") == "agent":
+                agent.append((kb_id, kb))
+            else:
+                normal.append(kb_id)
+        return agent, normal
+
+    @staticmethod
+    def _capture_agent_event(message: Dict[str, Any], frame: str) -> None:
+        """Persist sources carried by agent event frames into message metadata."""
+        import json
+
+        agent_event_prefix, _ = _agent_rag()
+        try:
+            payload = json.loads(frame[len(agent_event_prefix):].strip())
+        except Exception:
+            return
+        if payload.get("stage") == "sources" and payload.get("sources"):
+            metadata = message.setdefault("message_metadata", {})
+            metadata["agent_sources"] = payload["sources"]
 
     def create_conversation(
         self,
@@ -144,26 +189,47 @@ class ChatService:
                 ).get("knowledge_base_id")
                 kb_ids = [kb_id] if kb_id else []
             if kb_ids:
-                rag_config: Dict[str, Any] = {
-                    "data_store_type": "sqlite",
-                    "llm_provider": resolved_model["provider"],
-                    "llm_model": resolved_model["model"],
-                    "api_key": resolved_model["api_key"],
-                    "base_url": resolved_model["base_url"],
-                }
-                rag = RAGService(config=rag_config)
+                _, agent_rag_service_cls = _agent_rag()
+                agent_kbs, normal_kb_ids = self._partition_kbs(
+                    kb_ids, resolved_model["provider"]
+                )
                 answers = []
-                for kb_id in kb_ids:
-                    response = await asyncio.wait_for(
-                        rag.query(
-                            query=query,
-                            knowledge_base_id=kb_id,
-                            conversation_id=conversation_id,
-                            system_prompt=conversation.get("system_prompt"),
-                        ),
-                        timeout=CHAT_TIMEOUT_SECONDS,
+                for agent_kb_id, agent_kb in agent_kbs:
+                    agent_service = agent_rag_service_cls(
+                        kb_id=agent_kb_id,
+                        kb=agent_kb,
+                        resolved_model=resolved_model,
+                        system_prompt=conversation.get("system_prompt"),
+                        history=history,
+                        conversation_id=conversation_id,
                     )
-                    answers.append(response.answer)
+                    answer, sources = await asyncio.wait_for(
+                        agent_service.chat(query),
+                        timeout=CHAT_TIMEOUT_SECONDS * 3,
+                    )
+                    answers.append(answer)
+                    if sources:
+                        message["message_metadata"]["agent_sources"] = sources
+                if normal_kb_ids:
+                    rag_config: Dict[str, Any] = {
+                        "data_store_type": "sqlite",
+                        "llm_provider": resolved_model["provider"],
+                        "llm_model": resolved_model["model"],
+                        "api_key": resolved_model["api_key"],
+                        "base_url": resolved_model["base_url"],
+                    }
+                    rag = RAGService(config=rag_config)
+                    for kb_id in normal_kb_ids:
+                        response = await asyncio.wait_for(
+                            rag.query(
+                                query=query,
+                                knowledge_base_id=kb_id,
+                                conversation_id=conversation_id,
+                                system_prompt=conversation.get("system_prompt"),
+                            ),
+                            timeout=CHAT_TIMEOUT_SECONDS,
+                        )
+                        answers.append(response.answer)
                 message["answer"] = "\n\n".join(answers)
             else:
                 response = await asyncio.wait_for(
@@ -230,26 +296,54 @@ class ChatService:
                 ).get("knowledge_base_id")
                 kb_ids = [kb_id] if kb_id else []
             if kb_ids:
-                rag_config: Dict[str, Any] = {
-                    "data_store_type": "sqlite",
-                    "llm_provider": resolved_model["provider"],
-                    "llm_model": resolved_model["model"],
-                    "api_key": resolved_model["api_key"],
-                    "base_url": resolved_model["base_url"],
-                }
-                rag = RAGService(config=rag_config)
-                for kb_id in kb_ids:
-                    async for chunk in rag.query_stream(
-                        query=query,
-                        knowledge_base_id=kb_id,
-                        conversation_id=conversation_id,
-                        system_prompt=conversation.get("system_prompt"),
-                    ):
-                        message["answer"] += chunk
-                        yield chunk
-                    if len(kb_ids) > 1 and kb_id != kb_ids[-1]:
+                agent_event_prefix, agent_rag_service_cls = _agent_rag()
+                agent_kbs, normal_kb_ids = self._partition_kbs(
+                    kb_ids, resolved_model["provider"]
+                )
+                first_answer = True
+                for agent_kb_id, agent_kb in agent_kbs:
+                    if not first_answer:
                         message["answer"] += "\n\n"
                         yield "\n\n"
+                    first_answer = False
+                    agent_service = agent_rag_service_cls(
+                        kb_id=agent_kb_id,
+                        kb=agent_kb,
+                        resolved_model=resolved_model,
+                        system_prompt=conversation.get("system_prompt"),
+                        history=history,
+                        conversation_id=conversation_id,
+                    )
+                    async for chunk in agent_service.stream_chat(query):
+                        if chunk.startswith(agent_event_prefix):
+                            # 事件帧只透传给前端，不计入持久化的回答正文。
+                            self._capture_agent_event(message, chunk)
+                            yield chunk
+                        else:
+                            message["answer"] += chunk
+                            yield chunk
+                if normal_kb_ids:
+                    rag_config: Dict[str, Any] = {
+                        "data_store_type": "sqlite",
+                        "llm_provider": resolved_model["provider"],
+                        "llm_model": resolved_model["model"],
+                        "api_key": resolved_model["api_key"],
+                        "base_url": resolved_model["base_url"],
+                    }
+                    rag = RAGService(config=rag_config)
+                    for kb_id in normal_kb_ids:
+                        if not first_answer:
+                            message["answer"] += "\n\n"
+                            yield "\n\n"
+                        first_answer = False
+                        async for chunk in rag.query_stream(
+                            query=query,
+                            knowledge_base_id=kb_id,
+                            conversation_id=conversation_id,
+                            system_prompt=conversation.get("system_prompt"),
+                        ):
+                            message["answer"] += chunk
+                            yield chunk
             else:
                 llm = LLMService(
                     provider=resolved_model["provider"],

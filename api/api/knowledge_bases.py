@@ -8,10 +8,14 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
-from fastapi import APIRouter, Body, Depends, HTTPException, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, File, UploadFile
 from pydantic import BaseModel
 from typing import List, Optional
 
+from api.services.agent_index_service import (
+    agent_index_service,
+    resolve_default_llm_config,
+)
 from api.services.document_processor import DocumentProcessor, DocumentChunk
 from api.services.knowledge_base_store import knowledge_base_store
 from api.services.model_provider_service import model_provider_service
@@ -110,6 +114,35 @@ RAG_PLAN_PRESETS = {
             "fusion_mode": "weighted",
             "query_expansion": "hyde",
             "rerank_mode": "llm_listwise",
+        },
+    },
+    "agent": {
+        "key": "agent",
+        "name": "Agent 主动检索方案",
+        "summary": "主动 Agent RAG：素材导入后由 LLM 生成索引摘要；对话时 Agent 自主识别意图、决定何时检索并多轮取料，再加工回答。",
+        "cost_level": "中",
+        "quality_level": "智能路由",
+        "architecture": "导入期 LLM 生成索引摘要（标题/关键词/典型问题）并指向原文档；对话期 Function-Calling Agent 通过 kb_search 工具按需检索，两段式取料（索引摘要层 → 文档块级）",
+        "recommended_backend": "sqlite",
+        "vector_backend": "sqlite-builtin",
+        "datastore_note": "默认沿用 SQLite 本地存储，可在存储配置中切换 pgvector/ES；索引摘要与块向量共存于同一后端。",
+        "best_for": ["自创建 Agent 对话", "素材库问答", "需要意图识别与引用溯源的场景"],
+        "tradeoffs": ["导入期每文档多一次 LLM 摘要调用", "对话期 Agent 循环增加首 token 延迟", "依赖模型 function-calling 能力，失败时自动降级标准检索"],
+        "hardware_tier": "medium",
+        "rag_mode": "agent",
+        "embedding_provider": "openai",
+        "embedding_model": "text-embedding-3-small",
+        "splitter_config": {
+            "type": "recursive",
+            "chunk_size": 500,
+            "chunk_overlap": 100,
+        },
+        "retrieval_config": {
+            "methods": ["hybrid"],
+            "top_k": 10,
+            "fusion_mode": "rrf",
+            "query_expansion": "none",
+            "rerank_mode": "none",
         },
     },
 }
@@ -229,6 +262,45 @@ def _kb_datastore_config(kb_id: str) -> dict:
         }
     )
     return config
+
+
+def _schedule_agent_index(
+    background_tasks: BackgroundTasks,
+    kb_id: str,
+    document_id: str,
+    doc_name: str,
+    text: str,
+) -> None:
+    """Queue agent-index generation after a document is ingested.
+
+    No-op for non-agent KBs. Without a configured default model the entry is
+    recorded as an error so the UI can surface it instead of silently skipping.
+    """
+    kb = _knowledge_bases.get(kb_id, {})
+    if kb.get("rag_mode") != "agent":
+        return
+    llm_config = resolve_default_llm_config()
+    if llm_config is None:
+        agent_index_service.upsert_entry(
+            kb_id,
+            document_id,
+            name=doc_name,
+            status="error",
+            error="未配置默认模型供应商，无法生成 Agent 索引",
+        )
+        return
+    agent_index_service.upsert_entry(
+        kb_id, document_id, name=doc_name, status="pending"
+    )
+    background_tasks.add_task(
+        agent_index_service.schedule_index,
+        kb_id,
+        document_id,
+        doc_name,
+        text,
+        {**_kb_datastore_config(kb_id), **llm_config},
+        _kb_resource_level(kb_id),
+    )
 
 
 def _qa_llm_function():
@@ -375,6 +447,7 @@ def _get_rag_plan(plan_key: Optional[str]) -> dict:
 def _apply_rag_plan(kb: dict, plan_key: Optional[str]) -> None:
     plan = _get_rag_plan(plan_key)
     kb["rag_plan"] = plan["key"]
+    kb["rag_mode"] = plan.get("rag_mode", "standard")
     kb["hardware_tier"] = plan["hardware_tier"]
     kb["embedding_provider"] = plan.get("embedding_provider")
     kb["embedding_model"] = plan["embedding_model"]
@@ -407,6 +480,7 @@ class KnowledgeBaseOut(BaseModel):
     document_count: int = 0
     hardware_tier: Optional[str] = None
     rag_plan: Optional[str] = None
+    rag_mode: Optional[str] = None
     embedding_provider: Optional[str] = None
     recommended_backend: Optional[str] = None
     vector_backend: Optional[str] = None
@@ -456,6 +530,7 @@ async def list_knowledge_bases(user: dict = Depends(get_current_user)):
             document_count=kb.get("document_count", 0),
             hardware_tier=kb.get("hardware_tier", "medium"),
             rag_plan=kb.get("rag_plan", kb.get("hardware_tier", "medium")),
+            rag_mode=kb.get("rag_mode"),
             embedding_provider=kb.get("embedding_provider"),
             recommended_backend=kb.get("recommended_backend"),
             vector_backend=kb.get("vector_backend"),
@@ -495,6 +570,7 @@ async def create_knowledge_base(
         document_count=0,
         hardware_tier=_knowledge_bases[kb_id]["hardware_tier"],
         rag_plan=_knowledge_bases[kb_id]["rag_plan"],
+        rag_mode=_knowledge_bases[kb_id].get("rag_mode"),
         embedding_provider=_knowledge_bases[kb_id].get("embedding_provider"),
         recommended_backend=_knowledge_bases[kb_id].get("recommended_backend"),
         vector_backend=_knowledge_bases[kb_id].get("vector_backend"),
@@ -526,6 +602,7 @@ async def get_knowledge_base(kb_id: str, user: dict = Depends(get_current_user))
         document_count=kb.get("document_count", 0),
         hardware_tier=kb.get("hardware_tier", "medium"),
         rag_plan=kb.get("rag_plan", kb.get("hardware_tier", "medium")),
+        rag_mode=kb.get("rag_mode"),
         embedding_provider=kb.get("embedding_provider"),
         recommended_backend=kb.get("recommended_backend"),
         vector_backend=kb.get("vector_backend"),
@@ -603,6 +680,7 @@ async def update_knowledge_base(
         document_count=kb.get("document_count", 0),
         hardware_tier=kb.get("hardware_tier", "medium"),
         rag_plan=kb.get("rag_plan", kb.get("hardware_tier", "medium")),
+        rag_mode=kb.get("rag_mode"),
         embedding_provider=kb.get("embedding_provider"),
         recommended_backend=kb.get("recommended_backend"),
         vector_backend=kb.get("vector_backend"),
@@ -665,10 +743,15 @@ async def delete_knowledge_base(kb_id: str, user: dict = Depends(get_current_use
     if kb_id not in _knowledge_bases:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
 
+    datastore_config = _kb_datastore_config(kb_id)
     del _knowledge_bases[kb_id]
     if kb_id in _knowledge_base_documents:
         del _knowledge_base_documents[kb_id]
     _persist_kb_state()
+    agent_index_service.clear_kb(kb_id)
+    await asyncio.to_thread(
+        agent_index_service.delete_index_collection, kb_id, datastore_config
+    )
 
     return {"message": "Knowledge base deleted", "id": kb_id}
 
@@ -677,6 +760,7 @@ async def delete_knowledge_base(kb_id: str, user: dict = Depends(get_current_use
 async def add_document(
     kb_id: str,
     payload: KnowledgeBaseDocumentCreate,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
 ):
     """Add a document to a knowledge base."""
@@ -684,6 +768,10 @@ async def add_document(
         raise HTTPException(status_code=404, detail="Knowledge base not found")
 
     try:
+        document_id = str(uuid.uuid4())
+        doc_name = (payload.metadata or {}).get("name") or (
+            f"Document {len(_knowledge_base_documents.get(kb_id, [])) + 1}"
+        )
         splitter_config = _knowledge_bases[kb_id].get("splitter_config") or {}
         index_mode = splitter_config.get("index_mode") or "paragraph"
         if index_mode == "paragraph":
@@ -715,6 +803,12 @@ async def add_document(
                 splitter_config,
             )
 
+        # Stamp the document pointer on every chunk so agent-mode retrieval
+        # can drill from an index-summary hit down to that document's chunks.
+        for chunk in processed_chunks:
+            chunk.metadata["document_id"] = document_id
+            chunk.metadata.setdefault("document_name", doc_name)
+
         rag_level = _kb_resource_level(kb_id)
         rag_service = RAGService(
             resource_level=rag_level,
@@ -729,19 +823,21 @@ async def add_document(
             _knowledge_bases[kb_id].get("document_count", 0) + 1
         )
 
-        document_id = str(uuid.uuid4())
         documents = _knowledge_base_documents.setdefault(kb_id, [])
         documents.append(
             {
                 "id": document_id,
-                "name": (payload.metadata or {}).get("name")
-                or f"Document {len(documents) + 1}",
+                "name": doc_name,
                 "content_preview": payload.content[:120],
                 "chunks": len(processed_chunks),
                 "metadata": payload.metadata or {},
             }
         )
         _persist_kb_state()
+
+        _schedule_agent_index(
+            background_tasks, kb_id, document_id, doc_name, payload.content
+        )
 
         return {
             "document_id": document_id,
@@ -756,6 +852,7 @@ async def add_document(
 @router.post("/knowledge-bases/{kb_id}/documents/upload")
 async def upload_document(
     kb_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
@@ -769,6 +866,8 @@ async def upload_document(
         tmp_path = tmp.name
 
     try:
+        document_id = str(uuid.uuid4())
+        doc_name = file.filename or f"Document {len(_knowledge_base_documents.get(kb_id, [])) + 1}"
         doc_processor = DocumentProcessor()
         processed = await doc_processor.process_file(tmp_path)
         joined_text = "\n\n".join(chunk.content for chunk in processed.chunks)
@@ -794,6 +893,11 @@ async def upload_document(
                 {"name": file.filename},
                 splitter_config,
             )
+        # Stamp the document pointer on every chunk (see add_document).
+        for chunk in processed_chunks:
+            chunk.metadata["document_id"] = document_id
+            chunk.metadata.setdefault("document_name", doc_name)
+
         rag_service = RAGService(
             resource_level=_kb_resource_level(kb_id),
             config=_kb_datastore_config(kb_id),
@@ -806,12 +910,11 @@ async def upload_document(
         _knowledge_bases[kb_id]["document_count"] = (
             _knowledge_bases[kb_id].get("document_count", 0) + 1
         )
-        document_id = str(uuid.uuid4())
         documents = _knowledge_base_documents.setdefault(kb_id, [])
         documents.append(
             {
                 "id": document_id,
-                "name": file.filename or f"Document {len(documents) + 1}",
+                "name": doc_name,
                 "content_preview": processed_chunks[0].content[:120]
                 if processed_chunks
                 else "",
@@ -820,6 +923,9 @@ async def upload_document(
             }
         )
         _persist_kb_state()
+        _schedule_agent_index(
+            background_tasks, kb_id, document_id, doc_name, joined_text
+        )
         return {
             "document_id": document_id,
             "chunks": len(processed_chunks),
@@ -893,7 +999,10 @@ async def hit_test_knowledge_base(
 
 @router.delete("/knowledge-bases/{kb_id}/documents/{document_id}")
 async def delete_document(
-    kb_id: str, document_id: str, user: dict = Depends(get_current_user)
+    kb_id: str,
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
 ):
     if kb_id not in _knowledge_bases:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
@@ -904,4 +1013,62 @@ async def delete_document(
     _knowledge_base_documents[kb_id] = filtered
     _knowledge_bases[kb_id]["document_count"] = len(filtered)
     _persist_kb_state()
+    # Agent 模式：移除索引条目并后台重建索引集合，避免已删文档的摘要继续被路由命中。
+    kb = _knowledge_bases[kb_id]
+    if kb.get("rag_mode") == "agent":
+        agent_index_service.remove_entry(kb_id, document_id)
+        llm_config = resolve_default_llm_config()
+        if llm_config is not None:
+            background_tasks.add_task(
+                agent_index_service.resync_collection,
+                kb_id,
+                {**_kb_datastore_config(kb_id), **llm_config},
+                _kb_resource_level(kb_id),
+            )
     return {"result": "success"}
+
+
+@router.get("/knowledge-bases/{kb_id}/agent-index")
+async def get_agent_index(kb_id: str, user: dict = Depends(get_current_user)):
+    """List agent-mode index entries (title/summary/keywords/status per document)."""
+    if kb_id not in _knowledge_bases:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    kb = _knowledge_bases[kb_id]
+    return {
+        "data": agent_index_service.list_entries(kb_id),
+        "rag_mode": kb.get("rag_mode", "standard"),
+    }
+
+
+@router.post("/knowledge-bases/{kb_id}/agent-index/rebuild")
+async def rebuild_agent_index(
+    kb_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    """Regenerate all agent index entries of a KB in the background."""
+    if kb_id not in _knowledge_bases:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    kb = _knowledge_bases[kb_id]
+    if kb.get("rag_mode") != "agent":
+        raise HTTPException(400, "该知识库不是 Agent 主动检索方案")
+    llm_config = resolve_default_llm_config()
+    if llm_config is None:
+        raise HTTPException(400, "未配置默认模型供应商，无法生成 Agent 索引")
+    documents = [
+        {"id": doc.get("id"), "name": doc.get("name")}
+        for doc in _knowledge_base_documents.get(kb_id, [])
+    ]
+    for doc in documents:
+        if doc.get("id"):
+            agent_index_service.upsert_entry(
+                kb_id, doc["id"], name=doc.get("name"), status="pending", error=None
+            )
+    background_tasks.add_task(
+        agent_index_service.rebuild_kb,
+        kb_id,
+        documents,
+        {**_kb_datastore_config(kb_id), **llm_config},
+        _kb_resource_level(kb_id),
+    )
+    return {"status": "rebuilding", "documents": len(documents)}

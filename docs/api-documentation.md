@@ -622,3 +622,22 @@ try:
 except CollectionNotFoundError:
     print("Collection does not exist")
 ```
+
+## Agent RAG API（主动检索）
+
+知识库选择 `agent` 方案（`rag_plan=agent`，KB 记录上体现为 `rag_mode="agent"`）后启用主动检索。
+
+### 导入期
+
+`POST /knowledge-bases/{kb_id}/documents` 与 `/documents/upload` 完成后，后台任务（FastAPI `BackgroundTasks`）为每个文档生成索引条目：LLM 产出 `{title, summary, keywords, questions}`，写入 `agent_rag_index` namespace，并向量化到 `{kb_id}__agent_index` collection。条目状态：`pending → indexing → completed/error`。文档删除时联动移除条目并重建索引集合；知识库删除时清理全部索引。
+
+### 索引管理端点
+
+- `GET /knowledge-bases/{kb_id}/agent-index` → `{data: AgentIndexEntry[], rag_mode}`，前端以 3s 轮询跟踪 pending/indexing 状态。
+- `POST /knowledge-bases/{kb_id}/agent-index/rebuild` → 后台按数据存储中的分块（按 `metadata.document_id` 分组重建原文）全量重建索引；无默认模型供应商时返回 400。
+
+### 对话期
+
+`ChatService` 按 KB 的 `rag_mode` 分流：agent 模式 KB 走 `AgentRAGService`（`api/services/agent_rag_service.py`），主内核为 langgraph `create_react_agent`（注册 `kb_search` / `kb_list_documents` 两个工具，sqlite checkpointer 按 conversation_id 持久化会话状态，重启不丢），由 LLM 自主决定何时检索、检索几次；工具内部两段式取料（索引摘要层定位候选文档 → 块级分片按 `document_id` 过滤，过滤为空退回全量）。降级链：langgraph 内核 → 自研 `FunctionCallAgentRunner` → 标准 RAG 检索。
+
+流式协议保持 `text/plain`：Agent 事件以 `@@AGENT_EVENT@@` 前缀的单行 JSON 帧混入流（`stage`: `think|tool_call|tool_result|fallback|error|sources`），前端按行解析，事件帧不计入回答正文；`sources` 帧同时持久化到消息的 `message_metadata.agent_sources`。

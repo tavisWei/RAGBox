@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { knowledgeBaseApi, modelProviderApi } from '@/api'
 import { useClientPagination } from '@/composables/useClientPagination'
-import type { ModelProvider, RagPlanPreset } from '@/types'
+import type { AgentIndexEntry, ModelProvider, RagPlanPreset } from '@/types'
 
 const route = useRoute()
 const kb = ref<any>(null)
@@ -40,6 +40,68 @@ const hitTestForm = ref({
 const hitTestResult = ref<any>(null)
 const datastoreForm = ref({ type: '', host: '', port: 5432, user: '', password: '', database: '' })
 const testingDatastore = ref(false)
+const agentIndexEntries = ref<AgentIndexEntry[]>([])
+const rebuildingAgentIndex = ref(false)
+let agentIndexTimer: ReturnType<typeof setInterval> | undefined
+
+const agentIndexMap = computed(() => {
+  const map: Record<string, AgentIndexEntry> = {}
+  for (const entry of agentIndexEntries.value)
+    map[entry.document_id] = entry
+  return map
+})
+
+const agentStatusType = (status?: string) => {
+  if (status === 'completed') return 'success'
+  if (status === 'error') return 'danger'
+  if (status === 'indexing' || status === 'pending') return 'warning'
+  return 'info'
+}
+
+const agentStatusLabel = (status?: string) => {
+  if (status === 'completed') return '已完成'
+  if (status === 'error') return '索引失败'
+  if (status === 'indexing') return '索引中'
+  if (status === 'pending') return '待索引'
+  return '未索引'
+}
+
+const stopAgentIndexPolling = () => {
+  if (agentIndexTimer) {
+    clearInterval(agentIndexTimer)
+    agentIndexTimer = undefined
+  }
+}
+
+const fetchAgentIndex = async () => {
+  try {
+    const response = await knowledgeBaseApi.getAgentIndex(kbId)
+    agentIndexEntries.value = response.data.data || []
+  }
+  catch {
+    return
+  }
+  const hasActive = agentIndexEntries.value.some(entry => entry.status === 'pending' || entry.status === 'indexing')
+  if (hasActive && !agentIndexTimer)
+    agentIndexTimer = setInterval(fetchAgentIndex, 3000)
+  else if (!hasActive)
+    stopAgentIndexPolling()
+}
+
+const rebuildAgentIndex = async () => {
+  rebuildingAgentIndex.value = true
+  try {
+    await knowledgeBaseApi.rebuildAgentIndex(kbId)
+    ElMessage.success('已开始重建 Agent 索引')
+    await fetchAgentIndex()
+  }
+  catch {
+    ElMessage.error('重建索引失败')
+  }
+  finally {
+    rebuildingAgentIndex.value = false
+  }
+}
 
 const datastorePayload = () => {
   const form = datastoreForm.value
@@ -178,6 +240,10 @@ const fetchDetail = async () => {
       password: kbRes.data.datastore?.password || '',
       database: kbRes.data.datastore?.database || '',
     }
+    if (kbRes.data.rag_mode === 'agent')
+      await fetchAgentIndex()
+    else
+      agentIndexEntries.value = []
   }
   finally {
     loading.value = false
@@ -254,6 +320,10 @@ const runHitTest = async () => {
 
 onMounted(() => {
   fetchDetail()
+})
+
+onUnmounted(() => {
+  stopAgentIndexPolling()
 })
 
 watch(documentItems, () => {
@@ -375,7 +445,7 @@ watch(documentItems, () => {
         >
           <div class="plan-card__head">
             <strong>{{ plan.name }}</strong>
-            <el-tag size="small" :type="plan.key === 'low' ? 'success' : plan.key === 'high' ? 'warning' : 'primary'">
+            <el-tag size="small" :type="plan.key === 'low' ? 'success' : plan.key === 'high' || plan.key === 'agent' ? 'warning' : 'primary'">
               {{ plan.cost_level }}成本
             </el-tag>
           </div>
@@ -444,6 +514,17 @@ watch(documentItems, () => {
           </div>
           <div class="doc-item-meta">
             <el-tag size="small" effect="light">{{ doc.chunks }} 分块</el-tag>
+            <el-tooltip
+              v-if="kb?.rag_mode === 'agent'"
+              :disabled="agentIndexMap[doc.id]?.status !== 'error' || !agentIndexMap[doc.id]?.error"
+              :content="agentIndexMap[doc.id]?.error || ''"
+              placement="top"
+            >
+              <el-tag size="small" effect="light" :type="agentStatusType(agentIndexMap[doc.id]?.status)">
+                <el-icon v-if="agentIndexMap[doc.id]?.status === 'pending' || agentIndexMap[doc.id]?.status === 'indexing'" class="is-loading" size="12"><Loading /></el-icon>
+                {{ agentStatusLabel(agentIndexMap[doc.id]?.status) }}
+              </el-tag>
+            </el-tooltip>
             <el-button
               type="danger"
               size="small"
@@ -465,6 +546,56 @@ watch(documentItems, () => {
           layout="prev, pager, next"
           :hide-on-single-page="true"
         />
+      </div>
+    </div>
+
+    <!-- Agent Index Section -->
+    <div v-if="kb?.rag_mode === 'agent'" class="surface-card section-card">
+      <div class="section-header">
+        <div class="section-title">
+          <el-icon size="18" class="text-accent"><MagicStick /></el-icon>
+          <span>Agent 索引</span>
+        </div>
+        <el-button size="small" type="primary" plain :loading="rebuildingAgentIndex" @click="rebuildAgentIndex">
+          <el-icon><Refresh /></el-icon>
+          重建索引
+        </el-button>
+      </div>
+
+      <div v-if="agentIndexEntries.length === 0" class="empty-state">
+        <div class="empty-title">还没有 Agent 索引条目</div>
+        <div class="empty-desc">点击右上角「重建索引」为全部文档生成标题、摘要和关键词</div>
+      </div>
+
+      <div v-else class="agent-index-list">
+        <div
+          v-for="entry in agentIndexEntries"
+          :key="entry.document_id"
+          class="agent-index-item"
+        >
+          <div class="agent-index-head">
+            <span class="agent-index-title">{{ entry.title || entry.name }}</span>
+            <el-tooltip
+              :disabled="entry.status !== 'error' || !entry.error"
+              :content="entry.error || ''"
+              placement="top"
+            >
+              <el-tag size="small" :type="agentStatusType(entry.status)">
+                <el-icon v-if="entry.status === 'pending' || entry.status === 'indexing'" class="is-loading" size="12"><Loading /></el-icon>
+                {{ agentStatusLabel(entry.status) }}
+              </el-tag>
+            </el-tooltip>
+          </div>
+          <div class="agent-index-name">{{ entry.name }}</div>
+          <div v-if="entry.keywords?.length" class="agent-index-keywords">
+            <el-tag v-for="keyword in entry.keywords" :key="keyword" size="small" effect="plain">{{ keyword }}</el-tag>
+          </div>
+          <el-collapse v-if="entry.summary" class="agent-index-summary">
+            <el-collapse-item title="摘要" name="summary">
+              <p class="agent-index-summary-text">{{ entry.summary }}</p>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
       </div>
     </div>
 
@@ -1073,6 +1204,63 @@ watch(documentItems, () => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* Agent Index */
+.agent-index-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-index-item {
+  padding: 14px 16px;
+  border-radius: var(--rp-radius-md);
+  border: 1px solid var(--color-border-light);
+}
+
+.agent-index-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-index-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-heading);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-index-name {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+
+.agent-index-keywords {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.agent-index-summary {
+  margin-top: 8px;
+  border-top: none;
+}
+
+.agent-index-summary-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
 }
 
 /* Config Grid */

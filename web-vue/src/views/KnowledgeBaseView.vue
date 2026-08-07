@@ -56,6 +56,7 @@ const handleDelete = async (kb: KnowledgeBase) => {
 const getRagPlanLabel = (key: string) => {
   if (key === 'low') return '轻量起步'
   if (key === 'high') return '企业增强'
+  if (key === 'agent') return 'Agent 主动检索'
   return '团队标准'
 }
 
@@ -63,12 +64,14 @@ const getRagPlanBackend = (plan?: RagPlanPreset) => {
   if (!plan) return '-'
   if (plan.key === 'low') return 'SQLite 本地混合检索'
   if (plan.key === 'high') return 'Elasticsearch / 企业向量集群'
+  if (plan.key === 'agent') return 'sqlite-builtin'
   return 'PostgreSQL + pgvector'
 }
 
 const getRagPlanColor = (key: string) => {
   if (key === 'low') return 'success'
   if (key === 'high') return 'warning'
+  if (key === 'agent') return 'warning'
   return 'primary'
 }
 

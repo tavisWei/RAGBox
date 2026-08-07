@@ -7,6 +7,7 @@
 ## 核心特性
 
 - **资源自适应**：低/中/高三种资源级别，自动选择最优检索后端
+- **Agent 主动检索（Agent RAG）**：知识库可选用 `agent` 方案；素材导入后由 LLM 后台生成索引摘要（`api/services/agent_index_service.py`），对话时 langgraph ReAct Agent 经 `kb_search`/`kb_list_documents` 工具自主浏览与检索（`api/services/agent_rag_service.py`，两段式：索引摘要层 → 文档块级；sqlite checkpoint 持久化会话；降级链 langgraph → 自研 runner → 标准检索）
 - **数据层统一**：抽象 `BaseDataStore` 接口，支持 SQLite、PostgreSQL、Elasticsearch
 - **混合检索**：向量 + 关键词 + 全文，多路召回 + 融合
 - **Dify 集成**：保持兼容，通过扩展点增强能力

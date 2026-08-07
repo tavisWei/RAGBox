@@ -23,6 +23,8 @@ export const knowledgeBaseApi = {
   listDocuments: (id: string) => api.get(`/knowledge-bases/${id}/documents`),
   deleteDocument: (id: string, documentId: string) => api.delete(`/knowledge-bases/${id}/documents/${documentId}`),
   hitTest: (id: string, data: { query: string; top_k?: number; provider?: string; model?: string }) => api.post(`/knowledge-bases/${id}/hit-test`, data),
+  getAgentIndex: (id: string) => api.get(`/knowledge-bases/${id}/agent-index`),
+  rebuildAgentIndex: (id: string) => api.post(`/knowledge-bases/${id}/agent-index/rebuild`),
 }
 
 export const chatApi = {

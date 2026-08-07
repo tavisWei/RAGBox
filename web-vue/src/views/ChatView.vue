@@ -34,6 +34,7 @@ interface ChatRole {
 interface ConversationMessageRecord {
   query: string
   answer?: string | null
+  message_metadata?: { agent_sources?: string[] } | null
 }
 
 interface ChatMessageItem {
@@ -41,6 +42,8 @@ interface ChatMessageItem {
   role: 'user' | 'assistant'
   content: string
   isStreaming?: boolean
+  agentStage?: string
+  agentSources?: string[]
 }
 
 const createMessageId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -169,6 +172,10 @@ const selectedKnowledgeBaseNames = computed(() => knowledgeBases.value
   .filter(item => knowledgeBaseIds.value.includes(item.id))
   .map(item => item.name))
 
+const hasAgentKnowledgeBase = computed(() => knowledgeBases.value
+  .filter(item => knowledgeBaseIds.value.includes(item.id))
+  .some(item => item.rag_mode === 'agent'))
+
 const onProviderChange = () => {
   model.value = ''
 }
@@ -251,7 +258,7 @@ const loadConversationMessages = async (conversationId: string) => {
   const response = await conversationApi.getMessages(conversationId)
   messages.value = response.data.flatMap((item: ConversationMessageRecord) => ([
     { id: createMessageId(), role: 'user', content: item.query },
-    { id: createMessageId(), role: 'assistant', content: item.answer || '' },
+    { id: createMessageId(), role: 'assistant', content: item.answer || '', agentSources: item.message_metadata?.agent_sources },
   ]))
   persistChatState()
 }
@@ -268,6 +275,44 @@ watch(messages, () => {
   scrollToBottom()
 }, { deep: true })
 watch(loading, scrollToBottom)
+
+const AGENT_EVENT_PREFIX = '@@AGENT_EVENT@@'
+
+const applyAgentEvent = (message: ChatMessageItem, payload: any) => {
+  if (payload?.stage === 'think') message.agentStage = '思考中'
+  else if (payload?.stage === 'tool_call') message.agentStage = '检索素材中'
+  else if (payload?.stage === 'tool_result') message.agentStage = '已命中素材'
+  else if (payload?.stage === 'fallback') message.agentStage = '已降级标准检索'
+  else if (payload?.stage === 'error') message.agentStage = payload.detail || '检索出错'
+  else if (payload?.stage === 'sources' && Array.isArray(payload.sources)) message.agentSources = payload.sources
+}
+
+const appendStreamLine = (message: ChatMessageItem, line: string, newline: boolean) => {
+  if (line.startsWith(AGENT_EVENT_PREFIX)) {
+    try {
+      applyAgentEvent(message, JSON.parse(line.slice(AGENT_EVENT_PREFIX.length)))
+    }
+    catch {
+      // 忽略无法解析的事件帧
+    }
+    return
+  }
+  message.content += newline ? `${line}\n` : line
+}
+
+// 行缓冲解析对话流：TCP 分块可能把一行切断，不足一行留到下一轮
+const consumeStreamBuffer = (message: ChatMessageItem, buffer: string, flush = false) => {
+  const lines = buffer.split('\n')
+  const rest = lines.pop() ?? ''
+  for (const line of lines)
+    appendStreamLine(message, line, true)
+  if (flush) {
+    if (rest)
+      appendStreamLine(message, rest, false)
+    return ''
+  }
+  return rest
+}
 
 const sendMessage = async () => {
   if (!query.value.trim()) return
@@ -309,13 +354,16 @@ const sendMessage = async () => {
         throw new Error('stream failed')
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      let streamBuffer = ''
       while (true) {
         const { value, done } = await reader.read()
         if (done) break
-        assistantMessage.content += decoder.decode(value, { stream: true })
+        streamBuffer += decoder.decode(value, { stream: true })
+        streamBuffer = consumeStreamBuffer(assistantMessage, streamBuffer)
         await nextTick()
         scrollToBottom()
       }
+      consumeStreamBuffer(assistantMessage, streamBuffer, true)
       assistantMessage.isStreaming = false
       await fetchConversations()
     }
@@ -340,13 +388,16 @@ const sendMessage = async () => {
         throw new Error('stream failed')
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      let streamBuffer = ''
       while (true) {
         const { value, done } = await reader.read()
         if (done) break
-        assistantMessage.content += decoder.decode(value, { stream: true })
+        streamBuffer += decoder.decode(value, { stream: true })
+        streamBuffer = consumeStreamBuffer(assistantMessage, streamBuffer)
         await nextTick()
         scrollToBottom()
       }
+      consumeStreamBuffer(assistantMessage, streamBuffer, true)
       assistantMessage.isStreaming = false
     }
   } catch {
@@ -616,6 +667,12 @@ watch(() => route.query.appId, async () => {
             </div>
             <div class="message-bubble">
               <div class="message-sender">{{ msg.role === 'user' ? '我' : assistantName }}</div>
+              <div v-if="msg.role === 'assistant' && (msg.agentStage || msg.agentSources?.length)" class="agent-status">
+                <el-tag size="small" type="warning" effect="light">
+                  Agent 检索{{ msg.agentStage ? ` · ${msg.agentStage}` : '' }}
+                </el-tag>
+                <el-tag v-for="source in msg.agentSources || []" :key="source" size="small" effect="plain">{{ source }}</el-tag>
+              </div>
               <div v-if="msg.isStreaming && !msg.content" class="typing-indicator">
                 <span></span>
                 <span></span>
@@ -643,6 +700,7 @@ watch(() => route.query.appId, async () => {
         <div class="input-config-row">
           <div class="selected-kbs">
             <el-tag v-for="name in selectedKnowledgeBaseNames" :key="name" size="small" effect="plain">{{ name }}</el-tag>
+            <el-tag v-if="hasAgentKnowledgeBase" size="small" type="warning">Agent 主动检索</el-tag>
             <span v-if="selectedKnowledgeBaseNames.length === 0" class="muted-config">未选择知识库</span>
           </div>
           <div class="bottom-model-selectors">
@@ -1179,6 +1237,14 @@ watch(() => route.query.appId, async () => {
   font-weight: 500;
   margin-bottom: 6px;
   opacity: 0.7;
+}
+
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
 .message-text {

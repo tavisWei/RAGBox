@@ -78,7 +78,7 @@ class FunctionCallAgentRunner:
                 )
 
             response = await self._call_llm(messages)
-            total_tokens += response.get("usage", {}).get("total_tokens", 0)
+            total_tokens += (response.get("usage") or {}).get("total_tokens", 0)
 
             assistant_message = response["choices"][0]["message"]
             content = assistant_message.get("content", "")
@@ -221,13 +221,18 @@ class FunctionCallAgentRunner:
 
     async def _call_llm(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         tools = self.tool_engine.get_openai_tools_schema()
-        return await self.llm_client.chat.completions.create(
+        response = await self.llm_client.chat.completions.create(
             model=self.config.model,
             messages=messages,
             tools=tools if tools else None,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
         )
+        # OpenAI SDK returns pydantic models; normalize to plain dicts so the
+        # runner can subscript choices/messages uniformly.
+        if hasattr(response, "model_dump"):
+            response = response.model_dump()
+        return response
 
     async def _execute_tool_call(self, tool_call: Dict[str, Any]) -> str:
         function_name = tool_call["function"]["name"]
