@@ -325,3 +325,50 @@ def test_extract_final_answer():
     ]
     assert AgentRAGService._extract_final_answer({"messages": messages}) == "最终答案"
     assert AgentRAGService._extract_final_answer({"messages": []}) == ""
+
+
+# ----------------------------------------------------------------------
+# 数据存储解析优先级（与摄入路径一致）
+# ----------------------------------------------------------------------
+def test_resolve_kb_store_config_precedence(monkeypatch):
+    from api.services.agent_rag_service import resolve_kb_store_config
+    from api.services.component_config_service import component_config_service
+
+    monkeypatch.delenv("DATA_STORE_TYPE", raising=False)
+    monkeypatch.setattr(
+        component_config_service,
+        "get_active_datastore",
+        lambda: {"data_store_type": "pgvector", "datastore": {"host": "pg"}},
+    )
+
+    # KB 级配置优先于组件配置与环境变量
+    store_type, store_config = resolve_kb_store_config(
+        {
+            "datastore": {
+                "type": "pgvector",
+                "dsn": "postgresql://u:p@dbhost:5433/kb",
+            }
+        }
+    )
+    assert store_type == "pgvector"
+    assert store_config["host"] == "dbhost"
+    assert store_config["port"] == 5433
+
+    # 环境变量优先于组件配置
+    monkeypatch.setenv("DATA_STORE_TYPE", "elasticsearch")
+    assert resolve_kb_store_config({})[0] == "elasticsearch"
+    monkeypatch.delenv("DATA_STORE_TYPE")
+
+    # 组件配置优先于方案推荐后端
+    store_type, store_config = resolve_kb_store_config(
+        {"recommended_backend": "sqlite"}
+    )
+    assert store_type == "pgvector"
+    assert store_config == {"host": "pg"}
+
+    # 方案推荐后端优先于 sqlite 兜底
+    monkeypatch.setattr(
+        component_config_service, "get_active_datastore", lambda: None
+    )
+    assert resolve_kb_store_config({"recommended_backend": "qdrant"})[0] == "qdrant"
+    assert resolve_kb_store_config({})[0] == "sqlite"

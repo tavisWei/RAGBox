@@ -640,4 +640,6 @@ except CollectionNotFoundError:
 
 `ChatService` 按 KB 的 `rag_mode` 分流：agent 模式 KB 走 `AgentRAGService`（`api/services/agent_rag_service.py`），主内核为 langgraph `create_react_agent`（注册 `kb_search` / `kb_list_documents` 两个工具，sqlite checkpointer 按 conversation_id 持久化会话状态，重启不丢），由 LLM 自主决定何时检索、检索几次；工具内部两段式取料（索引摘要层定位候选文档 → 块级分片按 `document_id` 过滤，过滤为空退回全量）。降级链：langgraph 内核 → 自研 `FunctionCallAgentRunner` → 标准 RAG 检索。
 
+Agent 路径的数据存储解析（`resolve_kb_store_config`）与摄入路径保持同一优先级：**KB 级存储配置 > `DATA_STORE_TYPE` 环境变量 > 组件配置页启用项 > 方案推荐后端 > sqlite**，索引集合与块向量始终落在同一后端。
+
 流式协议保持 `text/plain`：Agent 事件以 `@@AGENT_EVENT@@` 前缀的单行 JSON 帧混入流（`stage`: `think|tool_call|tool_result|fallback|error|sources`），前端按行解析，事件帧不计入回答正文；`sources` 帧同时持久化到消息的 `message_metadata.agent_sources`。

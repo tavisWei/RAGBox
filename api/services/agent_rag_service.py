@@ -88,6 +88,45 @@ def build_event_frame(payload: Dict[str, Any]) -> str:
     return f"{AGENT_EVENT_PREFIX}{json.dumps(payload, ensure_ascii=False)}\n"
 
 
+def resolve_kb_store_config(kb: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """Resolve a KB's data store with the same precedence as the ingestion
+    path (``resolve_datastore_config`` in the knowledge-base routes):
+
+    KB-level datastore > DATA_STORE_TYPE env > component-config active store
+    > the KB plan's recommended backend > sqlite.
+
+    Returns (store_type, store_config); store_config may be empty.
+    """
+    datastore = kb.get("datastore") or {}
+    store_type = datastore.get("type")
+    if store_type:
+        if store_type == "pgvector" and datastore.get("dsn"):
+            return store_type, parse_pgvector_dsn(datastore["dsn"])
+        fields = {
+            key: datastore[key]
+            for key in ("host", "port", "user", "password", "database")
+            if datastore.get(key) not in (None, "")
+        }
+        if "port" in fields:
+            fields["port"] = int(fields["port"])
+        return store_type, fields
+
+    env_type = os.getenv("DATA_STORE_TYPE")
+    if env_type:
+        return env_type, {}
+
+    from api.services.component_config_service import component_config_service
+
+    active = component_config_service.get_active_datastore()
+    if active and active.get("data_store_type"):
+        return active["data_store_type"], active.get("datastore") or {}
+
+    recommended = kb.get("recommended_backend")
+    if recommended:
+        return recommended, {}
+    return "sqlite", {}
+
+
 class AgentRAGService:
     """Per-request agentic RAG pipeline bound to one knowledge base."""
 
@@ -108,12 +147,10 @@ class AgentRAGService:
         self.conversation_id = conversation_id
         self._sources: List[str] = []
 
-        # 数据存储解析沿用 KB 自身配置（与 chat_service 的 sqlite 硬编码不同，
-        # agent 路径需要定位 KB 真实的 collection）。
-        datastore = kb.get("datastore") or {}
-        store_type = (
-            datastore.get("type") or os.getenv("DATA_STORE_TYPE") or "sqlite"
-        )
+        # 数据存储解析与摄入路径（resolve_datastore_config）保持同一优先级：
+        # KB 级配置 > DATA_STORE_TYPE 环境变量 > 组件配置页启用项 > KB 方案推荐
+        # 后端 > sqlite，避免摄入与 Agent 检索落到不同后端。
+        store_type, store_config = resolve_kb_store_config(kb)
         rag_config: Dict[str, Any] = {
             "data_store_type": store_type,
             "embedding_provider": kb.get("embedding_provider"),
@@ -124,8 +161,8 @@ class AgentRAGService:
             "api_key": resolved_model.get("api_key"),
             "base_url": resolved_model.get("base_url"),
         }
-        if store_type == "pgvector" and datastore.get("dsn"):
-            rag_config["datastore"] = parse_pgvector_dsn(datastore["dsn"])
+        if store_config:
+            rag_config["datastore"] = store_config
         tier = (kb.get("hardware_tier") or "medium").lower()
         level = {
             "low": ResourceLevel.LOW,
